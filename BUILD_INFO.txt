@@ -1,0 +1,43 @@
+NX Hi-Fi v0.9.0
+Build target: Nintendo Switch, aarch64-none-elf, ARMv8-A Cortex-A57, PIE
+Compiler: devkitA64 GCC 16.1.0 (devkitPro r30 packages)
+libnx: 4.12.0
+SDL2: 2.28.5 (devkitPro port)
+SDL2_ttf: 2.22.0; SDL2_image: 2.0.4 (devkitPro ports)
+Build: ./build-switch.sh
+
+Changes over v0.8.0:
+- Availability check before entering a remote client; offline Retry/Back screen.
+- Independent control / Screen control chooser for online NX clients.
+- Native and browser screen control: live UI drawing state, button/touch input,
+  target-side navigation/settings, text entry on the controller, clipped titles,
+  artwork, theme/colour/fullscreen changes and docked/handheld replay.
+- Always-local Disconnect; hold Minus exactly 3 seconds for the local menu.
+  Short Minus presses forward on release. Disconnect does not stop playback.
+- API-verified local IPv4 discovery, progress/cancel, saved markers, connect
+  and save/edit actions. Wide networks are bounded to the local /24.
+- Fixed server and client port 8182, existing configuration/profile migration,
+  removed native/web editable port rows.
+- Compact source-format, sample-rate, bit-depth and bitrate blocks in handheld
+  and docked modes, matching fullscreen styling.
+- Existing MiSTer Hi-Fi independent API support retained; screen control is NX-only.
+
+Validation:
+- Cross-compiled and linked NRO; application/Homebrew metadata version 0.9.0.
+- Host core/config/audio, HTTP/WebSocket/client reconnect and socket writes.
+- Discovery and offline checks, subnet bounds/cancel, port migration, session
+  expiry and exact 3-second Minus timing.
+- Live host SDL target/controller fixture: offline gate, chooser, real mirrored
+  tab navigation, touch selection/text entry, masked password bridge, theme
+  choices, compact kHz badges, docked-to-handheld replay, independent navigation
+  and the local menu, with active playback.
+- Headless browser: client editing, mode/offline flow, discovery result UI,
+  live mirrored navigation/text entry, long Minus and playback-preserving disconnect.
+
+Physical Switch hardware was not available. On-device GPU, touch/keyboard,
+Wi-Fi/NAS interoperability, dock transitions and two-console control require
+hardware confirmation. MiSTer hardware compatibility is not newly verified here.
+Previous SMB lifecycle, bounded artwork and web-cover delivery fixes retained.
+Boot marker: boot.remote-modes-0.9.0.
+NRO SHA-256: cd1e98c5601dd38b02edcf75571e8dd90fc319b418c0717eeb0192d3ee67ce04
+ELF SHA-256: 549db9514e6a3e66383854eec2f5ed6cfb4995a95ce9429613307ec4725a6ddf

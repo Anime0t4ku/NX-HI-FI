@@ -1,0 +1,12 @@
+#define MA_NO_THREADING
+#define MA_NO_DEVICE_IO
+#define MA_NO_ENGINE
+#define MA_NO_RESOURCE_MANAGER
+#define MA_NO_NODE_GRAPH
+#define MA_NO_ENCODING
+#define STB_VORBIS_HEADER_ONLY
+#include "stb_vorbis.h"
+#define MINIAUDIO_IMPLEMENTATION
+#include "miniaudio.h"
+#undef STB_VORBIS_HEADER_ONLY
+#include "stb_vorbis.h"

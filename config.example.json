@@ -1,0 +1,28 @@
+{
+  "music_root": "sdmc:/music",
+  "volume": 80,
+  "shuffle": false,
+  "repeat": 0,
+  "eq_enabled": false,
+  "eq": [
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "shares": [],
+  "theme": "dark",
+  "accent_colour": "#EF4444",
+  "show_clock": true,
+  "clock_24h": true,
+  "show_artwork": true,
+  "hide_missing_art": false,
+  "prefer_folder_art": false,
+  "visualizer": true,
+  "remember_shuffle_repeat": true,
+  "screensaver_seconds": 0,
+  "remote_enabled": false,
+  "remote_port": 8182,
+  "remote_clients": []
+}

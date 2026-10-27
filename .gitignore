@@ -1,0 +1,12 @@
+/build/
+/build-host/
+/build-deps/
+/*.elf
+/*.nacp
+/*.nro
+/*.map
+/*.zip
+/sd-card/
+config.json
+config.json.bak
+config.json.tmp
