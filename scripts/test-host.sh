@@ -20,3 +20,6 @@ ${CXX:-c++} -O1 -std=c++17 -Iinclude tests/layout_test.cpp -o build-host/layout-
 
 ${CXX:-c++} -O1 -std=c++17 -Iinclude -Ithird_party source/core.cpp source/remote.cpp source/discovery.cpp source/websocket.cpp tests/discovery_test.cpp -lpthread -o build-host/discovery-test
 ./build-host/discovery-test
+
+${CXX:-c++} -O1 -std=c++17 -Iinclude -Ithird_party tests/mister_remote_test.cpp -o build-host/mister-remote-test
+./build-host/mister-remote-test

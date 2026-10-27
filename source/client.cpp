@@ -154,6 +154,13 @@ ClientSession::Result ClientSession::http(const Job &job) {
         result.error = "Cannot connect to client.";
         return result;
     }
+    // MiSTer may scan a ROM, authenticate a server or test a stream before
+    // replying. Keep the event connection independent while allowing that work.
+    bool slow=job.path.rfind("/api/browse",0)==0 || job.path=="/api/play" ||
+              job.path=="/api/emby/signin" || job.path=="/api/settings/test" ||
+              job.path=="/api/jellyfin/quickconnect";
+    timeval responseTimeout{slow ? 30 : 8,0};
+    setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&responseTimeout,sizeof responseTimeout);
     std::string body = job.method == "POST" ? job.body.dump() : "";
     std::string req = job.method + " " + job.path + " HTTP/1.1\r\nHost: " + config.host + ":" +
                       std::to_string(config.port) +

@@ -1,4 +1,5 @@
 #include "remote_view.hpp"
+#include "mister_remote.hpp"
 namespace nxh {
 namespace {
 using J = nlohmann::json;
@@ -83,14 +84,21 @@ void RemoteView::loadMetadata() {
         if (r.ok && r.data.is_object()) {
             appDoc_ = r.data;
             normalize();
+            refreshSources();
         }
     });
 }
 void RemoteView::refreshSources() {
     if (mister_)
         send("GET", "/api/sources", {}, [this](auto &r) {
-            if (r.ok && r.data.is_array())
+            if (r.ok && r.data.is_array()) {
                 sources_ = r.data;
+                if (!source_.empty()) {
+                    bool found=false;
+                    for (const auto &s:sources_) if(s.value("id",std::string{})==source_)found=true;
+                    if(!found){source_.clear();path_.clear();entries_=Json::array();if(page_==1)changePage(0);}
+                }
+            }
         });
 }
 void RemoteView::normalize() {
@@ -145,7 +153,9 @@ void RemoteView::normalize() {
         settings_[k] = value;
         Json d = field(k, f.value("label", path));
         auto type = f.value("type", std::string("text"));
-        d["kind"] = (type == "bool" || type == "checkbox")      ? "bool"
+        d["group"] = misterSettingsCategory(f);
+        d["help"] = f.value("help",std::string{});
+        d["kind"] = type == "color" ? "colour" : (type == "bool" || type == "checkbox")      ? "bool"
                     : type == "select" || f.contains("options") ? "choice"
                     : type == "number" || type == "int"         ? "number"
                     : type == "password"                        ? "password"
@@ -164,6 +174,13 @@ void RemoteView::normalize() {
         }
         fields_.push_back(d);
     }
+    allFields_=fields_;
+    fields_=Json::array();
+    const char *categories[]={"Playback","Appearance","Controls","System","Experimental"};
+    if(settingsCategory_>=0) for(const auto &f:allFields_) if(f.value("group",std::string{})==categories[settingsCategory_])fields_.push_back(f);
+    settings_["accent_colour"]=cfg.value("accent_colour",std::string("#EF4444"));
+    settings_["visualizer"]=true;
+    settings_["muted"]=raw_.value("muted",false);
     settings_["theme"] = cfg.value("oled_mode", false) ? "oled" : "dark";
     settings_["show_artwork"] = !cfg.value("hide_album_art", false);
     settings_["hide_missing_art"] = cfg.value("auto_hide_missing_art", false);
@@ -185,7 +202,9 @@ void RemoteView::normalize() {
               {"paused", raw_.value("state", std::string{}) == "paused"},
               {"busy", raw_.value("state", std::string{}) == "loading"},
               {"badges", Json::array()},
-              {"spectrum", Json::array()}};
+              {"spectrum", animatedRemoteSpectrum(SDL_GetTicks64()/1000.0,raw_.value("state",std::string{})=="playing")},
+              {"loading_message",raw_.value("loading_message",std::string{})},
+              {"error",raw_.value("error",std::string{})}};
     if (!raw_.value("format", std::string{}).empty())
         p["badges"].push_back(raw_["format"]);
     state_ = {{"settings", settings_},
@@ -272,6 +291,15 @@ void RemoteView::update() {
     }
     if (mister_ && client_->connected() && SDL_GetTicks64() - lastSettings_ > 2000)
         loadMetadata();
+    if (quickConnectPolling_ && client_->connected() && SDL_GetTicks64()-lastQuickPoll_>2000) {
+        lastQuickPoll_=SDL_GetTicks64();
+        send("GET","/api/jellyfin/quickconnect",{},[this](auto &r){
+            if(!r.ok)return;
+            auto state=r.data.value("state",std::string{});
+            if(state=="pending")status_="Jellyfin Quick Connect: "+r.data.value("code",std::string{})+" - approve in Jellyfin";
+            else {quickConnectPolling_=false;status_=state=="signed_in"?"Jellyfin signed in.":r.data.value("message",std::string("Sign-in ended."));refreshSources();}
+        });
+    }
     if (!state_.is_object())
         return;
     auto &artState = screenMode_ ? screenFrame_ : state_;
@@ -315,7 +343,7 @@ void RemoteView::command(std::string op, Json body) {
         return;
     }
     if (op == "play") {
-        send("POST", "/api/play", {{"source", source_}, {"path", body.at("path")}});
+        send("POST", "/api/play", {{"source", source_}, {"path", body.at("path")}}, [this](auto &r){if(r.ok)status_.clear();});
         return;
     }
     if (op == "seek" || op == "seek_to") {
@@ -324,6 +352,7 @@ void RemoteView::command(std::string op, Json body) {
         send("POST", "/api/seek", {{"position", std::max(0.0, position)}});
         return;
     }
+    if(op=="mute") {send("POST","/api/volume",{{"muted",!raw_.value("muted",false)}});return;}
     if (op == "volume") {
         send("POST", "/api/volume", {{"volume", body.at("value")}});
         return;
@@ -362,6 +391,8 @@ void RemoteView::patch(Json patch) {
 void RemoteView::browse(std::string source, std::string path, std::string child) {
     if (!source_.empty() && !loading_)
         positions_[key()] = {selected_, scroll_, {}};
+    auto previousSource=source_,previousPath=path_,previousRoot=root_,previousParent=parent_;
+    auto previousEntries=entries_;int previousRow=selected_,previousScroll=scroll_;
     source_ = std::move(source);
     path_ = std::move(path);
     if (!child.empty())
@@ -373,15 +404,19 @@ void RemoteView::browse(std::string source, std::string path, std::string child)
     entries_ = Json::array();
     documentKind_.clear();
     auto token = ++browseToken_;
-    auto response = [this, token](auto &r) {
+    auto response = [this, token,previousSource,previousPath,previousRoot,previousParent,previousEntries,previousRow,previousScroll](auto &r) {
         if (token != browseToken_)
             return;
         loading_ = false;
-        if (!r.ok)
+        if (!r.ok) {
+            source_=previousSource;path_=previousPath;root_=previousRoot;parent_=previousParent;entries_=previousEntries;selected_=previousRow;scroll_=previousScroll;
+            if(source_.empty())changePage(0);
             return;
+        }
         entries_ = r.data.value("entries", Json::array());
         path_ = r.data.value("path", path_);
         root_ = r.data.value("root", std::string{});
+        parent_=r.data.value("parent",std::string{});
         auto it = positions_.find(key());
         if (it != positions_.end()) {
             selected_ = it->second.row;
@@ -426,13 +461,15 @@ int RemoteView::maximum() const {
             document_.value(documentKind_ == "smb" ? "shares" : "stations", Json::array()).size());
     }
     if (page_ == 0)
-        return int(sources_.size()) + (mister_ ? 2 : 0);
+        return int(sources_.size()) + (mister_ ? 4 : 0);
     if (page_ == 1)
         return std::max(0, int(entries_.size()) - 1);
     if (page_ == 2)
         return 7;
-    if (page_ == 3)
+    if (page_ == 3) {
+        if(mister_ && settingsCategory_<0)return 4;
         return std::max(0, int(fields_.size()) - 1);
+    }
     return int(clients_.size());
 }
 void RemoteView::move(int delta) {
@@ -457,7 +494,8 @@ void RemoteView::adjust(int delta) {
         return;
     }
     if (controls_ || fullscreen_) {
-        control_ = (control_ + delta + 10) % 10;
+        int count=mister_?11:10;
+        control_ = (control_ + delta + count) % count;
         return;
     }
     if (page_ == 2 && !formOpen_ && selected_ >= 2 && selected_ <= 6) {
@@ -497,6 +535,9 @@ void RemoteView::transport(int index) {
     case 7:
         seek(10);
         break;
+    case 10:
+        if(mister_)command("mute");
+        break;
     case 8:
     case 9:
         command(
@@ -519,8 +560,8 @@ void RemoteView::choose(std::vector<Json> values, std::vector<std::string> label
 }
 void RemoteView::editValue(const Json &f, Json value, std::function<void(Json)> cb) {
     std::string kind = f.value("kind", std::string("text"));
-    if (kind == "info")
-        return;
+    if (kind == "info")return;
+    if(kind=="action"){mediaServerLogin(f.value("server_kind",std::string{}));return;}
     if (kind == "bool") {
         cb(!value.get<bool>());
         return;
@@ -607,16 +648,17 @@ void RemoteView::action() {
             browse(id.is_string() ? id.get<std::string>() : id.dump(), "");
         } else if (!mister_)
             sourceEditor(-1);
-        else
-            editDocument(selected_ == int(sources_.size())       ? "smb"
-                         : selected_ == int(sources_.size()) + 1 ? "radio"
-                                                                 : "plex");
+        else {
+            const char *kinds[]={"smb","radio","plex","jellyfin","emby"};
+            editDocument(kinds[selected_-int(sources_.size())]);
+        }
         return;
     }
     if (page_ == 1) {
         if (loading_ || entries_.empty())
             return;
         auto e = entries_[selected_];
+        if(e.value("disabled",false)){status_="This file cannot be played. Select a game or song.";return;}
         if (e.value("directory", e.value("is_dir", false)))
             browse(source_, e["path"]);
         else {
@@ -645,6 +687,7 @@ void RemoteView::action() {
             patch({{"eq", Json::array({0, 0, 0, 0, 0})}});
         return;
     }
+    if(mister_ && page_==3 && settingsCategory_<0){settingsCategory_=selected_;selected_=scroll_=0;normalize();return;}
     if (page_ == 3 && selected_ < int(fields_.size())) {
         auto f = fields_[selected_];
         std::string key = f["key"];
@@ -662,6 +705,7 @@ void RemoteView::back() {
     }
     if (formOpen_) {
         formOpen_ = false;
+        if(documentKind_=="plex"||documentKind_=="jellyfin"||documentKind_=="emby")documentKind_.clear();
         selected_ = scroll_ = 0;
         return;
     }
@@ -670,9 +714,10 @@ void RemoteView::back() {
         selected_ = scroll_ = 0;
         return;
     }
+    if(mister_ && page_==3 && settingsCategory_>=0){selected_=settingsCategory_;settingsCategory_=-1;scroll_=0;normalize();return;}
     if (page_ == 1 && !path_.empty() && path_ != "/" && path_ != root_) {
         auto old = path_;
-        auto next = parent(path_);
+        auto next = mister_ && !parent_.empty() ? parent_ : parent(path_);
         if (mister_ && (next.empty() || next.size() < root_.size()))
             next = root_.empty() ? "/" : root_;
         browse(source_, next, old);
@@ -733,7 +778,7 @@ void RemoteView::editDocument(std::string kind) {
     if (page_ != 0)
         return;
     auto navigation = navigation_;
-    std::string endpoint = kind == "plex" ? "/api/plex/config" : "/api/settings/" + kind;
+    std::string endpoint = (kind == "plex" || kind=="jellyfin" || kind=="emby") ? "/api/"+kind+"/config" : "/api/settings/" + kind;
     send("GET", endpoint, {}, [this, kind, navigation](auto &r) {
         if (navigation != navigation_)
             return;
@@ -742,8 +787,8 @@ void RemoteView::editDocument(std::string kind) {
         documentKind_ = kind;
         document_ = r.data;
         selected_ = scroll_ = 0;
-        if (kind == "plex")
-            documentForm(kind, 0);
+        if(kind=="jellyfin"||kind=="emby")mediaServerForm(kind);
+        else if (kind == "plex")documentForm(kind, 0);
     });
 }
 void RemoteView::documentForm(std::string kind, int index) {
@@ -760,15 +805,15 @@ void RemoteView::documentForm(std::string kind, int index) {
                                                                       : "text"));
         if (!values.contains("insecure"))
             values["insecure"] = false;
-        if (!values.contains("max_track_mb"))
-            values["max_track_mb"] = 0;
+        if (!values.contains("max_track_mb")) values["max_track_mb"] = 128;
+        for(auto &f:fields)if(f["key"]=="max_track_mb"){f["min"]=1;f["max"]=1024;}
         if (!values.contains("scrobbling") || values["scrobbling"] == "")
             values["scrobbling"] = "plex";
         for (auto &f : fields)
             if (f["key"] == "scrobbling") {
                 f["kind"] = "choice";
-                f["choices"] = Json::array({"plex", "lastfm", "none"});
-                f["labels"] = Json::array({"Plex", "Last.fm", "Off"});
+                f["choices"] = Json::array({"plex", "lastfm", "listenbrainz", "both", "none"});
+                f["labels"] = Json::array({"Plex", "Last.fm", "ListenBrainz", "Both", "Off"});
             }
         openForm(
             "PLEX", values, fields,
@@ -812,7 +857,7 @@ void RemoteView::documentForm(std::string kind, int index) {
     } else {
         for (auto pair : {std::pair<const char *, const char *>{"name", "Name"},
                           {"url", "URL"},
-                          {"genre", "Genre"}}) {
+                          {"genre", "Genre"}, {"logo", "Logo"}}) {
             if (values.contains(pair.second)) {
                 values[pair.first] = values[pair.second];
                 values.erase(pair.second);
@@ -972,6 +1017,7 @@ void RemoteView::click(int x, int y) {
         controls_ = fullscreen_;
         return;
     }
+    if(mister_ && inside(x,y,888,layout().bottom(635),76,46)){control_=10;controls_=true;transport(10);return;}
     if (inside(x, y, 980, layout().bottom(635), 250, 48)) {
         command("volume", {{"value", std::clamp((x - 980) * 100 / 250, 0, 100)}});
         return;
@@ -1062,7 +1108,7 @@ void RemoteView::drawPlayer() {
 }
 void RemoteView::drawControls() {
     auto p = state_.value("playback", Json::object());
-    ui_.text(28, layout().bottom(605), client_->connected() ? status_ : client_->error(), 16,
+    ui_.text(28, layout().bottom(605), client_->connected() ? (!status_.empty()?status_:p.value("error",std::string{}).empty()?p.value("loading_message",std::string{}):p.value("error",std::string{})) : client_->error(), 16,
              ACCENT, 1220);
     ui_.rect(0, layout().bottom(630), 1280, 90, FOOTER);
     for (int i = 0; i < 10; ++i) {
@@ -1083,6 +1129,7 @@ void RemoteView::drawControls() {
             ui_.line(x, y, x - side * 7, y, 2, TEXT);
             ui_.line(x, y, x, y - vertical * 7, 2, TEXT);
         }
+    if(mister_)ui_.button(888,layout().bottom(635),76,46,settings_.value("muted",false)?"Unmute":"Mute",(controls_||fullscreen_)&&control_==10);
     ui_.text(980, layout().bottom(635),
              "Volume " + std::to_string(settings_.value("volume", 80)) + "%", 15, MUTED);
     ui_.rect(980, layout().bottom(669), 250, 5, LINE);
@@ -1145,6 +1192,8 @@ void RemoteView::draw() {
                 names.push_back("Manage SMB shares");
                 names.push_back("Manage radio stations");
                 names.push_back("Configure Plex");
+                names.push_back("Configure Jellyfin");
+                names.push_back("Configure Emby");
             } else
                 names.push_back("+ Add SMB share");
         } else if (page_ == 1) {
@@ -1166,7 +1215,9 @@ void RemoteView::draw() {
             for (auto &v : bands)
                 values.push_back(display(v) + " dB");
         } else if (page_ == 3) {
-            heading = "TARGET SETTINGS";
+            const char *categories[]={"Playback","Appearance","Controls","System","Experimental"};
+            heading = mister_ && settingsCategory_>=0 ? std::string("MISTER SETTINGS / ")+categories[settingsCategory_] : "TARGET SETTINGS";
+            if(mister_ && settingsCategory_<0){for(auto category:categories)names.push_back(category);}
             for (auto &f : fields_) {
                 auto k = f.at("key").get<std::string>();
                 names.push_back(f.value("label", k));

@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace nxh {
-constexpr const char *Version = "0.9.0";
+constexpr const char *Version = "1.0.0";
 struct Share {
     std::string name, server, share, folder, user, password, domain;
     bool guest = false;

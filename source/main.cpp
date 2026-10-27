@@ -2005,7 +2005,7 @@ int main(int, char **) {
     Settings settings;
     settings.musicRoot = "sdmc:/music";
     std::string error;
-    playbackTrace("boot.remote-modes-0.9.0", 0, true);
+    playbackTrace("boot.mister-remote-1.0.0", 0, true);
     loadSettings(ConfigPath, settings, error);
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS) < 0) {
         consoleInit(nullptr);

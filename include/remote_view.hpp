@@ -82,6 +82,13 @@ class RemoteView {
     bool protocolReady_ = false;
     bool mister_, fullscreen_ = false, controls_ = false, loading_ = false, dragging_ = false;
     int page_ = 0, selected_ = 0, scroll_ = 0, control_ = 1, repeat_ = 0, horizontal_ = 0;
+    int settingsCategory_ = -1;
+    Json allFields_ = Json::array();
+    bool quickConnectPolling_ = false;
+    uint64_t lastQuickPoll_ = 0;
+    std::string parent_;
+    void mediaServerForm(std::string kind);
+    void mediaServerLogin(std::string kind);
     Json state_ = Json::object(), raw_ = Json::object(), settings_ = Json::object(),
          fields_ = Json::array(), appDoc_ = Json::object(), sources_ = Json::array(),
          entries_ = Json::array();
