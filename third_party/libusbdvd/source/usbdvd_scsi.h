@@ -1,0 +1,332 @@
+#ifndef USBDVD_SCSI_H
+#define USBDVD_SCSI_H
+
+
+#include <string.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <mutex>
+
+
+#include "usbdvd_scsi_common.h"
+#include "switch_usb.h"
+
+    
+    
+typedef struct {
+    struct {
+        uint8_t peripheral_device_type : 5;
+        uint8_t peripheral_qualifier   : 3;
+    };
+    struct {
+        uint8_t reserved_1 : 7;
+        uint8_t rmb        : 1;
+    };
+    uint8_t version;
+    struct {
+        uint8_t response_data_format : 4;
+        uint8_t hisup                : 1;
+        uint8_t naca                 : 1;
+        uint8_t reserved_2           : 2;
+    };
+    uint8_t additional_length;
+    struct {
+        uint8_t protect    : 1;
+        uint8_t reserved_3 : 2;
+        uint8_t _3pc       : 1;
+        uint8_t tpgs       : 2;
+        uint8_t acc        : 1;
+        uint8_t sccs       : 1;
+    };
+    struct {
+        uint8_t reserved_4 : 4;
+        uint8_t multip     : 1;
+        uint8_t vs_1       : 1;
+        uint8_t encserv    : 1;
+        uint8_t reserved_5 : 1;
+    };
+    struct {
+        uint8_t vs_2       : 1;
+        uint8_t cmdque     : 1;
+        uint8_t reserved_6 : 6;
+    };
+    char vendor_id[0x8];
+    char product_id[0x10];
+    char product_revision[0x4];
+    char serial_number[0x8];
+} ScsiInquiryStandardData;
+
+typedef struct {
+    uint8_t response_code;
+    uint8_t segment_number;
+    struct {
+        uint8_t sense_key  : 4;
+        uint8_t reserved_1 : 1;
+        uint8_t ili        : 1;
+        uint8_t eom        : 1;
+        uint8_t file_mark  : 1;
+    };
+    uint8_t information[0x4];
+    uint8_t additional_sense_length;
+    uint8_t cmd_specific_info[0x4];
+    uint8_t additional_sense_code;
+    uint8_t additional_sense_code_qualifier;
+    uint8_t field_replaceable_unit_code;
+    uint8_t sense_key_specific[0x3];
+} ScsiRequestSenseDataFixedFormat;
+
+typedef enum {
+    ScsiSenseKey_NoSense        = 0x00,
+    ScsiSenseKey_RecoveredError = 0x01,
+    ScsiSenseKey_NotReady       = 0x02,
+    ScsiSenseKey_MediumError    = 0x03,
+    ScsiSenseKey_HardwareError  = 0x04,
+    ScsiSenseKey_IllegalRequest = 0x05,
+    ScsiSenseKey_UnitAttention  = 0x06,
+    ScsiSenseKey_DataProtect    = 0x07,
+    ScsiSenseKey_BlankCheck     = 0x08,
+    ScsiSenseKey_VendorSpecific = 0x09,
+    ScsiSenseKey_CopyAborted    = 0x0A,
+    ScsiSenseKey_AbortedCommand = 0x0B,
+    ScsiSenseKey_Reserved       = 0x0C,
+    ScsiSenseKey_VolumeOverflow = 0x0D,
+    ScsiSenseKey_Miscompare     = 0x0E,
+    ScsiSenseKey_Completed      = 0x0F
+} ScsiSenseKey;
+
+
+typedef enum {
+    // Profili non conformi
+    ATAPI_PROFILE_NON_REMOVABLE_DISK = 0x01,
+    ATAPI_PROFILE_REMOVABLE_DISK = 0x02,
+    ATAPI_PROFILE_MO_ERASABLE = 0x03,
+    ATAPI_PROFILE_MO_WRITE_ONCE = 0x04,
+    ATAPI_PROFILE_AS_MO = 0x05,
+    
+    // Profili CD
+    ATAPI_PROFILE_CD_ROM = 0x08,
+    ATAPI_PROFILE_CD_R = 0x09,
+    ATAPI_PROFILE_CD_RW = 0x0A,
+    
+    // Profili DVD
+    ATAPI_PROFILE_DVD_ROM = 0x10,
+    ATAPI_PROFILE_DVD_R_SEQUENTIAL = 0x11,
+    ATAPI_PROFILE_DVD_RAM = 0x12,
+    ATAPI_PROFILE_DVD_RW_RESTRICTED_OVERWRITE = 0x13,
+    ATAPI_PROFILE_DVD_RW_SEQUENTIAL = 0x14,
+    ATAPI_PROFILE_DVD_R_DL_SEQUENTIAL = 0x15,
+    ATAPI_PROFILE_DVD_R_DL_JUMP_RECORDING = 0x16,
+    ATAPI_PROFILE_DVD_RW_DL = 0x17,
+    ATAPI_PROFILE_DVD_DOWNLOAD_DISC = 0x18,
+    
+    // Profili DVD+
+    ATAPI_PROFILE_DVD_PLUS_RW = 0x1A,
+    ATAPI_PROFILE_DVD_PLUS_R = 0x1B,
+    ATAPI_PROFILE_DVD_PLUS_RW_DL = 0x2A,
+    ATAPI_PROFILE_DVD_PLUS_R_DL = 0x2B,
+    
+    // Profili HD DVD
+    ATAPI_PROFILE_HD_DVD_ROM = 0x30,
+    ATAPI_PROFILE_HD_DVD_R = 0x31,
+    ATAPI_PROFILE_HD_DVD_RAM = 0x32,
+    ATAPI_PROFILE_HD_DVD_RW = 0x33,
+    ATAPI_PROFILE_HD_DVD_R_DL = 0x38,
+    ATAPI_PROFILE_HD_DVD_RW_DL = 0x3A,
+    
+    // Profili Blu-ray
+    ATAPI_PROFILE_BD_ROM = 0x40,
+    ATAPI_PROFILE_BD_R_SEQUENTIAL = 0x41,
+    ATAPI_PROFILE_BD_R_RANDOM = 0x42,
+    ATAPI_PROFILE_BD_RE = 0x43,
+    ATAPI_PROFILE_BD_R_DL_SEQUENTIAL = 0x50,
+    ATAPI_PROFILE_BD_R_DL_JUMP_RECORDING = 0x51,
+    ATAPI_PROFILE_BD_RE_DL = 0x52,
+    
+    // Profilo non standard/non valido
+    ATAPI_PROFILE_NONE = 0x00,
+    ATAPI_PROFILE_UNKNOWN = 0xFFFF
+} atapi_profile_t;
+
+typedef struct{
+    uint8_t size[4];
+    uint8_t blocksize[4];
+} __attribute__((packed)) disccapacity_struct;
+
+
+typedef struct {
+    uint16_t data_length;           
+    uint8_t  reserved[2];
+    
+    uint8_t  book_type_part_version;
+    uint8_t  disc_size_max_rate;
+    uint8_t  disc_structure;
+    
+    uint8_t  recording_density;
+    
+    uint32_t data_area_start;       // big-endian
+    uint32_t data_area_end;         // big-endian  
+    uint32_t layer0_end;            // big-endian (dual layer only)
+    
+    uint8_t  bca_flag;              // 0x00 = no BCA, 0x01 = BCA exists
+    
+    uint8_t  media_specific[2031];  
+} __attribute__((packed)) dvd_physical_format_t;
+
+typedef struct {
+    uint16_t data_length;           // sempre 0x0802
+    uint8_t  reserved[2];
+    uint8_t  disc_manufacturing_info[2048];
+} __attribute__((packed)) dvd_manufacturing_info_t;
+
+typedef struct {
+    uint16_t data_length;      //    always 0x0006
+    uint8_t  reserved[2];
+    
+    uint8_t  CSS;
+    uint8_t  region_info;
+    
+} __attribute__((packed)) dvd_copyright_info_t;
+
+typedef struct{
+    uint16_t datalen;
+    u_int8_t reserved[5];
+    u_int8_t agid;
+    
+
+}__attribute__((packed)) agid_struct;
+
+
+typedef struct 
+{
+    u_int8_t data_len[2];
+    u_int8_t reserved0[2];
+    u_int8_t key[5];
+    u_int8_t reserved[3];
+}css_chalkey_struct;
+
+typedef struct 
+{
+    u_int8_t data_len[2];
+    u_int8_t reserved0[2];
+    u_int8_t key[10];
+    u_int8_t reserved[2];
+}css_chal2_struct;
+
+
+typedef struct _SCSI_PASS_THROUGH_DIRECT {
+    uint16_t Length;
+    uint8_t  ScsiStatus;
+    uint8_t  PathId;
+    uint8_t  TargetId;
+    uint8_t  Lun;
+    uint8_t  CdbLength;
+    uint8_t  SenseInfoLength;
+    uint8_t  DataIn;
+    uint64_t  DataTransferLength;
+    uint64_t  TimeOutValue;
+    void *  DataBuffer;
+    uint64_t  SenseInfoOffset;
+    uint8_t  Cdb[16];
+} SCSI_PASS_THROUGH_DIRECT, *PSCSI_PASS_THROUGH_DIRECT;
+
+
+typedef enum {
+	UsbDvdFeatureSupport_Unknown = 0,
+	UsbDvdFeatureSupport_Supported = 1,
+	UsbDvdFeatureSupport_Unsupported = 2
+} UsbDvdFeatureSupport;
+
+class CUSBSCSI{
+public:
+    CUSBSCSI(CSWITCH_USB * _usb_ctx);
+    ~CUSBSCSI();
+    int USBScsiInit();
+    void USBScsi_Free();
+    
+    int UsbDvdSCSI_PASSTROUGHT(uint8_t lun,uint8_t *pass_cbw,uint32_t pass_cbwsize,uint16_t allocation_length,bool data_in,void *buf);
+    int internal_sense_command(ScsiRequestSenseDataFixedFormat *sense_data);
+    
+    int AppleSuperDriveUnlock(uint8_t lun,uint8_t *buf);
+    
+    /* MMC-2 Commands*/
+    int UsbDvdUnitReady(uint8_t lun);
+    int UsbDvdSense(uint8_t lun,uint16_t allocation_length, ScsiRequestSenseDataFixedFormat *sense_data);
+    int UsbDvdSendInquiry(uint8_t lun,uint16_t allocation_length, void *buf);
+    int UsbDvd_Read12(uint8_t lun,uint32_t read_lba,uint32_t numsec,uint8_t *data,bool streaming = false);
+    int UsbDvd_Read10(uint8_t lun,uint32_t read_lba,uint16_t numsec,uint8_t *data);
+    int UsbDvdReadCD_Audio(uint8_t lun,uint32_t read_lba,uint16_t numsec,uint8_t *data);
+    int UsbDvdReadCD_Data(uint8_t lun,uint32_t read_lba,uint16_t numsec,uint8_t *data);
+    int UsbDvdSendTOC(uint8_t lun,  void **buf, int *bufsize);
+    int UsbDvdPreventMediumRemoval(uint8_t lun,uint32_t prevent);
+    int UsbDvdGetCapacity(uint8_t lun,uint8_t *buf);
+    int UsbDvdGetConfig(uint8_t lun,uint8_t *buf);
+    int UsbDvd_Eject(uint8_t lun);
+    
+    /* MMC-3 Commands*/
+    
+    int UsbDvdReadDVDStructure(uint8_t lun,uint8_t _format,uint16_t allocation_length, void *buf);
+    
+    /* MMC-4 Commands*/
+    
+    int UsbDvdGetDiscKey(uint8_t lun,uint8_t _agi,uint8_t *buf);
+    int UsbDvdGetAGID(uint8_t lun,uint8_t *buf);
+    int UsbDvdSendPlayerKey(uint8_t lun,uint8_t _agid,uint8_t * _playerkey);
+    int UsbDvdInvalidateAGID(uint8_t lun,uint8_t _agid);
+    int UsbDvdReportChallenge(uint8_t lun,uint8_t _agid,uint8_t *buf);
+    int ReportKey1(uint8_t lun,uint8_t _agid,uint8_t *buf);
+    int SendKey2(uint8_t lun,uint8_t _agid,uint8_t *_key2);
+    int GetASF(uint8_t lun,uint8_t *buf);
+    int UsbDvdSendChallenge(uint8_t lun,uint8_t* challenge_seed,uint8_t _agid);
+    
+    /* MMC-5 Commands*/
+    int UsbDvdSetStreamingMode(uint8_t lun,uint32_t start_lba,uint32_t end_lba,uint32_t read_size,uint32_t read_time);
+    int UsbDvdResetStreamingMode(uint8_t lun);
+    
+    /* MMC-6 Commands*/
+	int UsbDvdReadAhead(uint8_t lun,uint32_t start_lba,uint32_t read_ahead_lba);
+	int UsbDvdReadAheadSafe(uint8_t lun,uint32_t start_lba,uint32_t read_ahead_lba);
+	int UsbDvdSetStreamingModeSafe(uint8_t lun,uint32_t start_lba,uint32_t end_lba,uint32_t read_size,uint32_t read_time);
+    
+	UsbDvdFeatureSupport GetReadAheadSupport(){ return read_ahead_support; }
+	UsbDvdFeatureSupport GetStreamingModeSupport(){ return streaming_mode_support; }
+    
+	
+    /* CSS Releated  */
+    int CrackTitleKey( int i_pos, int i_len,uint8_t * p_titlekey );
+    int GetBusKey();
+    
+    /* AACS Releated*/
+    
+    int UsbBlurayInvalidateAGID(uint8_t lun, uint8_t _agid);
+    int UsbBlurayInvalidateAllAGID(uint8_t lun);
+    int UsbBlurayResetAACS(uint8_t lun);
+    
+    CSWITCH_USB *usb_ctx;
+    
+    int UsbDvdStartStopUnit(uint8_t lun, bool start);
+    
+private:
+    
+    //std::mutex usb_mutex;
+    
+    std::mutex scsi_operation_mutex;
+	
+	UsbDvdFeatureSupport read_ahead_support = UsbDvdFeatureSupport_Unknown;
+	UsbDvdFeatureSupport streaming_mode_support = UsbDvdFeatureSupport_Unknown;
+	
+
+    int send_scsi_command(CBW *cbw,bool receive,void *buf,bool auto_sense = false);
+    int send_scsi_command_pass(CBW *cbw, bool receive, void *buf);
+
+};
+
+
+
+
+
+
+
+#endif /* USBDVD_SCSI_H */
+

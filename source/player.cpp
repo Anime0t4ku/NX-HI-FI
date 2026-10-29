@@ -1,6 +1,8 @@
 #include "playback_diagnostics.hpp"
 #include "player.hpp"
 #include "decoder.hpp"
+#include "disc.hpp"
+#include <deque>
 #include <random>
 namespace nxh {
 static ma_result readDecoder(ma_decoder *d, void *out, size_t n, size_t *got) {
@@ -172,6 +174,7 @@ void Player::work() {
     }
 }
 void Player::decode(Track track, uint64_t gen) {
+    if (track.source.root == DiscRoot) { decodeDisc(std::move(track), gen); return; }
     auto fail = [&](const std::string &e) {
         std::lock_guard<std::mutex> lock(mutex_);
         if (generation_ == gen) {
@@ -381,4 +384,5 @@ void Player::decode(Track track, uint64_t gen) {
         }
     }
 }
+#include "player_disc.inc"
 } // namespace nxh

@@ -32,6 +32,7 @@ class Player {
     std::vector<std::array<float, 256>> cosines_, sines_;
     void work();
     void decode(Track, uint64_t);
+    void decodeDisc(Track, uint64_t);
     void requestLocked();
 
   public:

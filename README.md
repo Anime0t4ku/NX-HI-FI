@@ -96,6 +96,28 @@ The remote player uses a decorative animated visualizer; it does not react to th
 
 Playback stays on the device you control. Remote features depend on the target's capabilities; they do not add those audio formats or sources to local Switch playback.
 
+## Physical audio CDs (v1.1.0)
+
+Connect a USB CD/DVD drive and choose **Sources → Physical Disc**. Use a powered
+dock or hub if the drive needs additional power. Launch NX Hi-Fi through title
+override for full application memory.
+
+The disc is streamed as CDDA (44.1 kHz, 16-bit stereo); no ripping or temporary
+audio files are required. Pause, seeking, previous/next, shuffle, repeat, EQ and
+the visualizer work with CDs. **Gapless audio CD playback** is enabled by default
+and can be changed in Settings. Data tracks on mixed-mode CDs are skipped.
+
+MusicBrainz supplies album/artist/track names from the disc TOC. Artwork uses
+Cover Art Archive (release, then release group), then a matching iTunes album.
+Metadata and artwork are cached in `sdmc:/switch/nx-hifi/cd-cache/`. Offline or
+unknown discs use Track 01-style names. Unknown-disc results expire after seven
+days; network/server failures are not cached.
+
+To refresh after inserting/changing a disc, reopen Physical Disc from Sources.
+Read errors or drive removal stop playback and display an error. The Web Remote
+also includes Physical Disc. Another updated NX Hi-Fi can browse it remotely.
+Physical USB-drive compatibility and playback must be tested on a real Switch.
+
 ## Helpful notes
 
 - **Local format support:** M4A/AAC/ALAC and Opus are not supported for local playback on the Switch. Some files may have limited seeking or an estimated duration.

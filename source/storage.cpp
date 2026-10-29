@@ -1,5 +1,6 @@
 #include "playback_diagnostics.hpp"
 #include "storage.hpp"
+#include "disc.hpp"
 #include "cover_image.hpp"
 #include "smb_lifecycle.hpp"
 #include "artwork.hpp"
@@ -118,6 +119,8 @@ std::unique_ptr<Input> openInput(const Source &s, const std::string &p, std::str
         error = "Invalid relative path.";
         return {};
     }
+    if (s.root == DiscRoot)
+        return openDisc(p, error, g, e);
     if (s.smb) {
         auto input = std::make_unique<SmbInput>(s, p, error, g, e);
         if (!input->valid())
@@ -137,6 +140,10 @@ bool listDirectory(const Source &s, const std::string &p, std::vector<Entry> &ou
     if (!safeRelative(p)) {
         error = "Invalid directory path.";
         return false;
+    }
+    if (s.root == DiscRoot) {
+        if (!p.empty()) { error = "Invalid audio CD folder."; return false; }
+        return listDisc(out, error);
     }
     if (s.smb) {
         SmbSession session(s.share);
@@ -230,6 +237,8 @@ static std::vector<unsigned char> folderCover(const Source &s, const std::string
     return {};
 }
 std::vector<unsigned char> loadCover(const Source &s, const std::string &track, bool preferFolder) {
+    if (s.root == DiscRoot)
+        return discCover(track);
     if (preferFolder) {
         auto bytes = folderCover(s, track);
         if (!bytes.empty())

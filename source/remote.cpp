@@ -1,5 +1,6 @@
 #include "playback_diagnostics.hpp"
 #include "remote.hpp"
+#include "disc.hpp"
 #include "socket_write.hpp"
 #include "websocket.hpp"
 #include <sys/select.h>
@@ -190,7 +191,7 @@ RemoteServer::Json RemoteServer::libraryRequest(const Json &j, bool test) {
         j["sources_revision"].get<uint64_t>() != revision)
         return failure("Sources changed; refresh and try again.");
     int index = j.value("source", -1);
-    if (index < -1 || index >= int(settings.shares.size()))
+    if (index < (test ? -1 : -2) || index >= int(settings.shares.size()))
         return failure("Source no longer exists.");
     Source source{false, {}, settings.musicRoot};
     std::string error, path = j.value("path", std::string{});
@@ -202,7 +203,9 @@ RemoteServer::Json RemoteServer::libraryRequest(const Json &j, bool test) {
             return failure(error);
         source = {true, share, share.folder};
         path = "";
-    } else if (index >= 0)
+    } else if (index == -2)
+        source = {false, {}, DiscRoot};
+    else if (index >= 0)
         source = {true, settings.shares[index], settings.shares[index].folder};
     std::vector<Entry> entries;
     if (!listDirectory(source, path, entries, error))

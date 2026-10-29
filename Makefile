@@ -8,7 +8,7 @@ endif
 
 APP_TITLE := NX Hi-Fi
 APP_AUTHOR := Anime0t4ku
-APP_VERSION := 1.0.0
+APP_VERSION := 1.1.0
 ICON := icon.jpg
 export TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules
@@ -45,7 +45,7 @@ TARGET		:=	nx-hifi
 BUILD		:=	build
 SOURCES		:=	source
 DATA		:=	data
-INCLUDES	:=	include third_party
+INCLUDES	:=	include third_party third_party/libusbdvd/include third_party/libusbdvd/source third_party/libusbdvd/source/os/switch
 #ROMFS	:=	romfs
 
 #---------------------------------------------------------------------------------
@@ -63,13 +63,13 @@ CXXFLAGS	:= $(CFLAGS) -std=gnu++17 -fexceptions
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:=	-lsmb2 -lSDL2_image -lpng -ljpeg -lwebp -lSDL2_ttf -lharfbuzz -lfreetype -lbz2 -lz `sdl2-config --libs`
+LIBS	:=	-lusbdvd -lcurl -lmbedcrypto -lmbedx509 -lmbedtls -lsmb2 -lSDL2_image -lpng -ljpeg -lwebp -lSDL2_ttf -lharfbuzz -lfreetype -lbz2 -lz `sdl2-config --libs`
 
 #---------------------------------------------------------------------------------
 # list of directories containing libraries, this must be the top level containing
 # include and lib
 #---------------------------------------------------------------------------------
-LIBDIRS := $(TOPDIR)/build-deps/install $(PORTLIBS) $(LIBNX)
+LIBDIRS := $(TOPDIR)/third_party/libusbdvd $(TOPDIR)/build-deps/install $(PORTLIBS) $(LIBNX)
 
 
 #---------------------------------------------------------------------------------

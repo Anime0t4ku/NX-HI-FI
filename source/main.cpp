@@ -1,6 +1,7 @@
 #include "playback_diagnostics.hpp"
 #include "loader.hpp"
 #include "player.hpp"
+#include "disc.hpp"
 #include "ui.hpp"
 #include "remote.hpp"
 #include "remote_view.hpp"
@@ -501,9 +502,9 @@ class App {
             if (!sourceCheck())
                 return fail("Sources changed; refresh and try again.");
             int index = j.value("source", -1);
-            if (index < -1 || index >= int(settings.shares.size()))
+            if (index < -2 || index >= int(settings.shares.size()))
                 return fail("Source no longer exists.");
-            Source src = index < 0
+            Source src = index == -2 ? Source{false, {}, DiscRoot} : index < 0
                              ? Source{false, {}, settings.musicRoot}
                              : Source{true, settings.shares[index], settings.shares[index].folder};
             const auto &rows = j.at("tracks");
@@ -581,6 +582,7 @@ class App {
         for (auto &preset : accentPresets)
             accents.push_back({{"name", preset.name}, {"hex", preset.hex}});
         return {{"version", Version},
+                {"physical_disc", true},
                 {"revision", revision},
                 {"sources_revision", sourcesRevision},
                 {"settings", settingsDocument(settings)},
@@ -809,7 +811,7 @@ class App {
         loading = true;
         entries.clear();
         selected = scroll = 0;
-        status = "Loading folder...";
+        status = source.root == DiscRoot ? "Reading audio CD and metadata..." : "Loading folder...";
         browser.request(source, folder);
         page = 1;
     }
@@ -827,7 +829,7 @@ class App {
             if (!entry.directory) {
                 if (entry.path == e.path)
                     index = tracks.size();
-                tracks.push_back({source, entry.path, title(entry.name)});
+                tracks.push_back({source, entry.path, source.root == DiscRoot ? entry.name : title(entry.name)});
             }
         player.play(std::move(tracks), index);
         status = "";
@@ -932,7 +934,7 @@ class App {
         if (page == 1)
             return std::max(0, int(entries.size()) - 1);
         if (page == 0)
-            return settings.shares.size() + 1;
+            return settings.shares.size() + 2;
         if (page == 2)
             return 7;
         return int(settingFields().size()) - 1;
@@ -1031,7 +1033,9 @@ class App {
         if (page == 0) {
             if (selected == 0)
                 browse(Source{false, {}, settings.musicRoot}, "");
-            else if (selected == int(settings.shares.size()) + 1) {
+            else if (selected == int(settings.shares.size()) + 1)
+                browse(Source{false, {}, DiscRoot}, "");
+            else if (selected == int(settings.shares.size()) + 2) {
                 edit = {};
                 editIndex = -1;
                 editing = true;
@@ -1263,7 +1267,7 @@ class App {
     }
     std::string trackAlbum(const Playback &p) const {
         return !p.details.album.empty() ? p.details.album
-               : p.track.path.empty()   ? "SD card + SMB"
+               : p.track.path.empty()   ? "SD card + SMB + audio CD"
                                         : filename(parent(p.track.path));
     }
     void drawBadges(const Playback &p, int x, int y, int width, int size = 18) {
@@ -1891,7 +1895,7 @@ class App {
             if (editIndex >= 0)
                 values.push_back("");
         } else if (page == 1) {
-            heading = source.smb
+            heading = source.root == DiscRoot ? "PHYSICAL DISC" : source.smb
                           ? (source.share.name.empty() ? source.share.server : source.share.name)
                           : "SD CARD";
             heading = sourceSelected ? heading + "  /  " + (folder.empty() ? "Music" : folder)
@@ -1908,6 +1912,8 @@ class App {
                 names.push_back(s.name.empty() ? s.server : s.name);
                 values.push_back(s.server + " / " + s.share);
             }
+            names.push_back("Physical Disc");
+            values.push_back("USB audio CD / MusicBrainz");
             names.push_back("+ Add SMB share");
             values.push_back("");
         } else if (page == 2) {
@@ -2005,7 +2011,7 @@ int main(int, char **) {
     Settings settings;
     settings.musicRoot = "sdmc:/music";
     std::string error;
-    playbackTrace("boot.mister-remote-1.0.0", 0, true);
+    playbackTrace("boot.physical-disc-1.1.0", 0, true);
     loadSettings(ConfigPath, settings, error);
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS) < 0) {
         consoleInit(nullptr);
@@ -2091,6 +2097,7 @@ int main(int, char **) {
             app.draw();
         }
     }
+    shutdownDisc();
     IMG_Quit();
     TTF_Quit();
     SDL_DestroyRenderer(renderer);

@@ -151,6 +151,7 @@ nlohmann::json settingsDocument(const Settings &s, bool secrets) {
             {"prefer_folder_art", s.preferFolderArt},
             {"visualizer", s.visualizer},
             {"remember_shuffle_repeat", s.rememberShuffleRepeat},
+            {"gapless_playback", s.gaplessPlayback},
             {"wrap_navigation", s.wrapNavigation},
             {"hold_repeat", s.holdRepeat},
             {"remote_enabled", s.remoteEnabled},
@@ -185,6 +186,7 @@ nlohmann::json settingFields() {
     add("hide_missing_art", "Hide missing artwork placeholder", "Artwork", "bool");
     add("prefer_folder_art", "Prefer folder artwork", "Artwork", "bool");
     add("visualizer", "Show visualizer", "Visualizer", "bool");
+    add("gapless_playback", "Gapless audio CD playback", "Playback", "bool");
     add("remember_shuffle_repeat", "Remember shuffle / repeat", "Playback", "bool");
     add("screensaver_seconds", "Screensaver", "Display", "choice",
         {0, 30, 60, 120, 300, 600, 1800});
@@ -215,6 +217,8 @@ bool patchSettings(Settings &s, const nlohmann::json &patch, std::string &error)
             flag = &next.preferFolderArt;
         else if (key == "visualizer")
             flag = &next.visualizer;
+        else if (key == "gapless_playback")
+            flag = &next.gaplessPlayback;
         else if (key == "remember_shuffle_repeat")
             flag = &next.rememberShuffleRepeat;
         else if (key == "wrap_navigation")

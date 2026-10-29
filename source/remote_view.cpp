@@ -121,6 +121,8 @@ void RemoteView::normalize() {
         fields_ = state_.value("fields", Json::array());
         sources_ = Json::array();
         sources_.push_back({{"id", -1}, {"name", "SD card"}});
+        if (state_.value("physical_disc", false))
+            sources_.push_back({{"id", -2}, {"name", "Physical Disc"}});
         int i = 0;
         for (auto &s : settings_.value("shares", Json::array()))
             sources_.push_back({{"id", i++}, {"name", s.value("name", std::string("SMB"))}});

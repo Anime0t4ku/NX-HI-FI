@@ -7,8 +7,12 @@
 using namespace nxh;
 // HTTP tests isolate transport and dispatch from the platform SMB implementation.
 namespace nxh {
-bool listDirectory(const Source &, const std::string &path, std::vector<Entry> &rows,
+bool listDirectory(const Source &source, const std::string &path, std::vector<Entry> &rows,
                    std::string &error) {
+    if (source.root == "cdda:") {
+        rows = {{"CD song", "disc-id/Track01.wav", false}};
+        return true;
+    }
     if (path == "unreadable") {
         error = "Unreadable folder.";
         return false;
@@ -90,6 +94,12 @@ int main() {
                      R"({"source":9,"path":"","sources_revision":9})"))["ok"] == false);
     assert(body(http(port, "POST", "/api/browse",
                      R"({"source":-1,"path":"unreadable","sources_revision":9})"))["ok"] == false);
+    auto disc = body(http(port, "POST", "/api/browse",
+                          R"({"source":-2,"path":"","sources_revision":9})"));
+    assert(disc["ok"] == true && disc["source"] == -2 && disc["entries"][0]["name"] == "CD song");
+    assert(body(http(port, "POST", "/api/cmd",
+                     R"({"op":"play_folder","source":-2,"path":"","track":"disc-id/Track01.wav","sources_revision":9})"))["ok"] == true);
+    { std::lock_guard<std::mutex> lock(mutex); assert(command["source"] == -2 && command["index"] == 0); }
     auto play = body(http(
         port, "POST", "/api/cmd",
         R"({"op":"play_folder","source":-1,"path":"","track":"Two.mp3","sources_revision":9})"));
