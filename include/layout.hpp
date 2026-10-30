@@ -34,11 +34,13 @@ struct Layout {
     int bottom(int y) const {
         return y + extraHeight();
     }
+    int footerY()const{return height()-40;}
+    int footerHeight()const{return 40;}
     int panelHeight() const {
-        return 445 + extraHeight();
+        return footerY()-155-16;
     }
     int rows() const {
-        return 8 + extraHeight() / 48;
+        return (155+panelHeight()-rowTop())/rowHeight();
     }
     int rowTop() const {
         return 182;
@@ -50,13 +52,13 @@ struct Layout {
         return rowTop() + rows() * rowHeight();
     }
     int optionRows() const {
-        return rows();
+        return 8+extraHeight()/48;
     }
     int optionFirst(int selected) const {
         return std::max(0, selected - optionRows() + 1);
     }
     int compactArtDesignSize() const {
-        return docked ? 212 : 180;
+        return docked ? 166 : 98;
     }
     int compactArtX() const {
         return 1064 - compactArtDesignSize() / 2;
@@ -65,7 +67,7 @@ struct Layout {
         return x(full ? 440 : compactArtDesignSize());
     }
     int compactTitleY() const {
-        return 178 + artSize(false) + 15;
+        return 182 + artSize(false) + 18;
     }
     int fullY(int y) const {
         // Spread fullscreen content over the additional vertical space.

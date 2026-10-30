@@ -7,7 +7,7 @@ Supported audio formats and codecs: **MP3, FLAC, PCM WAV and Ogg Vorbis**.
 ## Getting started
 
 1. Copy `nx-hifi.nro` to `sdmc:/switch/nx-hifi/` on your Switch SD card. If your download includes an `sd-card` folder, copy its contents to the root of the SD card instead.
-2. Put your music in `sdmc:/music/`, or choose another music folder in Settings.
+2. Put your music in `sdmc:/music/`, or highlight **SD card** in Sources and press **X** to choose another folder.
 3. Open NX Hi-Fi from the Homebrew Menu. Full-memory application mode, also called title override, is recommended.
 4. Choose a source and select a song.
 
@@ -27,10 +27,10 @@ The layout adjusts automatically between handheld and docked use. NX Hi-Fi must 
 
 | Control | Action |
 | --- | --- |
-| L / R | Switch sections |
+| L / R | Switch sections; previous/next track in local fullscreen |
 | D-pad / left stick | Move through lists |
 | A / B | Select / Back |
-| Left / Right | Jump through lists, adjust EQ, or select a player control |
+| Left / Right | Jump through lists, adjust EQ, or adjust the highlighted player control |
 | Plus | Play / Pause |
 | ZL / ZR | Previous / Next song |
 | Y | Toggle shuffle |
@@ -39,7 +39,9 @@ The layout adjusts automatically between handheld and docked use. NX Hi-Fi must 
 | X | Edit the selected source or remote client; otherwise stop playback |
 | Touch | Select items and use player controls |
 
-While player controls are focused, Up/Down seeks in five-second steps. On-screen hints show the controls available on each screen.
+In the local mini player and fullscreen player, **Up/Down** moves between control rows. **Left/Right** selects buttons, seeks in ten-second steps when the seek bar is highlighted, or adjusts volume in five-percent steps when volume is highlighted. Fullscreen opens with Play/Pause selected; **B** closes it. The footer uses Switch button symbols.
+
+Enable **Settings > Playback > Auto Fullscreen** to open fullscreen when selecting a track. This is off by default. New configurations start at **100% volume**; existing saved volumes are retained.
 
 ## Music from a network share
 
@@ -58,6 +60,8 @@ Enter a username and password, or enable Guest if your server allows it. SMB2/SM
 Artwork is read from supported MP3 and FLAC files. You can also place `cover.jpg`, `folder.png` or `front.jpg` beside your music; JPG, JPEG and PNG variants are supported.
 
 Settings includes Light, Dark and OLED themes, accent colours, artwork preferences, a visualizer, a clock and a screensaver. The Equalizer section provides presets and manual adjustment of five frequency bands.
+
+Settings uses categories on the left, entries in the middle and the mini player on the right. Select a category with **A** and return to categories with **B**. **Minus** switches focus to the mini player and preserves your place.
 
 Settings are saved automatically. The screensaver turns the display black while playback continues; press a button or touch the screen to wake it.
 
@@ -96,7 +100,7 @@ The remote player uses a decorative animated visualizer; it does not react to th
 
 Playback stays on the device you control. Remote features depend on the target's capabilities; they do not add those audio formats or sources to local Switch playback.
 
-## Physical audio CDs (v1.1.0)
+## Physical audio CDs
 
 Connect a USB CD/DVD drive and choose **Sources → Physical Disc**. Use a powered
 dock or hub if the drive needs additional power. Launch NX Hi-Fi through title

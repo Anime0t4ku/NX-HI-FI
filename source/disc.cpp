@@ -79,7 +79,7 @@ DiscHTTP http() {
         CURL *c=curl_easy_init();if(!c)return 0;
         Download data{&out,limit};
         curl_easy_setopt(c,CURLOPT_URL,url.c_str());
-        curl_easy_setopt(c,CURLOPT_USERAGENT,"NX-Hi-Fi/1.1.0 (https://github.com/Anime0t4ku/NX-HI-FI)");
+        curl_easy_setopt(c,CURLOPT_USERAGENT,"NX-Hi-Fi/1.2.0 (https://github.com/Anime0t4ku/NX-HI-FI)");
         curl_easy_setopt(c,CURLOPT_FOLLOWLOCATION,1L);
         curl_easy_setopt(c,CURLOPT_MAXREDIRS,5L);
         curl_easy_setopt(c,CURLOPT_PROTOCOLS,CURLPROTO_HTTPS);

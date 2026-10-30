@@ -150,6 +150,7 @@ nlohmann::json settingsDocument(const Settings &s, bool secrets) {
             {"hide_missing_art", s.hideMissingArt},
             {"prefer_folder_art", s.preferFolderArt},
             {"visualizer", s.visualizer},
+            {"auto_fullscreen", s.autoFullscreen},
             {"remember_shuffle_repeat", s.rememberShuffleRepeat},
             {"gapless_playback", s.gaplessPlayback},
             {"wrap_navigation", s.wrapNavigation},
@@ -186,6 +187,7 @@ nlohmann::json settingFields() {
     add("hide_missing_art", "Hide missing artwork placeholder", "Artwork", "bool");
     add("prefer_folder_art", "Prefer folder artwork", "Artwork", "bool");
     add("visualizer", "Show visualizer", "Visualizer", "bool");
+    add("auto_fullscreen", "Auto Fullscreen", "Playback", "bool");
     add("gapless_playback", "Gapless audio CD playback", "Playback", "bool");
     add("remember_shuffle_repeat", "Remember shuffle / repeat", "Playback", "bool");
     add("screensaver_seconds", "Screensaver", "Display", "choice",
@@ -205,7 +207,9 @@ bool patchSettings(Settings &s, const nlohmann::json &patch, std::string &error)
         auto key = it.key();
         auto &v = it.value();
         bool *flag = nullptr;
-        if (key == "show_clock")
+        if (key == "auto_fullscreen")
+            flag = &next.autoFullscreen;
+        else if (key == "show_clock")
             flag = &next.showClock;
         else if (key == "clock_24h")
             flag = &next.clock24h;
@@ -402,6 +406,7 @@ bool loadSettings(const std::string &path, Settings &s, std::string &error) {
         return i != o.end() && i->is_string() ? i->get<std::string>() : fallback;
     };
     s.musicRoot = text(j, "music_root", s.musicRoot);
+    s.autoFullscreen = j.contains("auto_fullscreen") && j["auto_fullscreen"].is_boolean() ? j["auto_fullscreen"].get<bool>() : false;
     auto theme = text(j, "theme", "dark");
     s.theme = theme == "light" || theme == "oled" ? theme : "dark";
     auto accent = text(j, "accent_colour", "#EF4444");
@@ -516,9 +521,31 @@ bool saveSettings(const std::string &path, const Settings &s, std::string &error
     }
     return true;
 }
-void sortEntries(std::vector<Entry> &e) {
-    std::sort(e.begin(), e.end(), [](auto &a, auto &b) {
-        return a.directory != b.directory ? a.directory : lower(a.name) < lower(b.name);
+namespace {
+bool naturalNameLess(const std::string &left,const std::string &right){
+    auto a=lower(left),b=lower(right);size_t i=0,j=0;
+    auto digit=[](unsigned char c){return c>='0'&&c<='9';};
+    while(i<a.size()&&j<b.size()){
+        if(digit(a[i])&&digit(b[j])){
+            size_t endA=i,endB=j;while(endA<a.size()&&digit(a[endA]))endA++;while(endB<b.size()&&digit(b[endB]))endB++;
+            size_t startA=i,startB=j;while(startA<endA&&a[startA]=='0')startA++;while(startB<endB&&b[startB]=='0')startB++;
+            size_t lengthA=endA-startA,lengthB=endB-startB;
+            // Compare digit strings rather than converting: arbitrarily large numbers are safe.
+            if(lengthA!=lengthB)return lengthA<lengthB;
+            int numeric=a.compare(startA,lengthA,b,startB,lengthB);if(numeric)return numeric<0;
+            if(endA-i!=endB-j)return endA-i<endB-j; // Equal values: fewer leading zeroes first.
+            i=endA;j=endB;continue;
+        }
+        auto ca=static_cast<unsigned char>(a[i]),cb=static_cast<unsigned char>(b[j]);
+        if(ca!=cb)return ca<cb;i++;j++;
+    }
+    if(i!=a.size()||j!=b.size())return i==a.size();
+    return left<right; // Deterministic order for case-only differences.
+}
+}
+void sortEntries(std::vector<Entry> &entries){
+    std::sort(entries.begin(),entries.end(),[](const auto &a,const auto &b){
+        return a.directory!=b.directory?a.directory:naturalNameLess(a.name,b.name);
     });
 }
 LocalInput::LocalInput(const std::string &p) {

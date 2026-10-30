@@ -152,6 +152,8 @@ class RemoteView {
     }
     void drawPlayer();
     void drawControls();
+    // Independent clients retain their existing transport footer and its list bounds.
+    int listRows() const { return 8 + layout().extraHeight() / 48; }
     std::string key() const {
         return source_ + "\n" + path_;
     }

@@ -427,7 +427,7 @@ void RemoteView::browse(std::string source, std::string path, std::string child)
                 if (entries_[i].value("path", std::string{}) == it->second.child)
                     selected_ = i;
             selected_ = std::clamp(selected_, 0, maximum());
-            scroll_ = std::clamp(scroll_, std::max(0, selected_ - layout().rows() + 1), selected_);
+            scroll_ = std::clamp(scroll_, std::max(0, selected_ - listRows() + 1), selected_);
         }
         status_ = "";
     };
@@ -487,8 +487,8 @@ void RemoteView::move(int delta) {
     selected_ = (selected_ + delta % count + count) % count;
     if (selected_ < scroll_)
         scroll_ = selected_;
-    if (selected_ >= scroll_ + layout().rows())
-        scroll_ = selected_ - layout().rows() + 1;
+    if (selected_ >= scroll_ + listRows())
+        scroll_ = selected_ - listRows() + 1;
 }
 void RemoteView::adjust(int delta) {
     if (optionApply_) {
@@ -954,7 +954,9 @@ void RemoteView::displayChanged() {
              {{"op", "screen_input"}, {"session", screenToken_}, {"kind", "cancel"}});
     screenTouch_ = false;
     dragging_ = false;
-    layout().keepVisible(selected_, scroll_, maximum() + 1);
+    selected_ = std::clamp(selected_, 0, maximum());
+    scroll_ = std::clamp(scroll_, std::max(0, selected_ - listRows() + 1), selected_);
+    scroll_ = std::min(scroll_, std::max(0, maximum() + 1 - listRows()));
 }
 void RemoteView::swipe(int delta) {
     if (!optionApply_ && !controls_ && !fullscreen_)
@@ -1031,7 +1033,7 @@ void RemoteView::click(int x, int y) {
         drag(x);
         return;
     }
-    if (!fullscreen_ && inside(x, y, 28, 182, 828, layout().rows() * 48)) {
+    if (!fullscreen_ && inside(x, y, 28, 182, 828, listRows() * 48)) {
         int target = scroll_ + (y - 182) / 48;
         if (target <= maximum()) {
             controls_ = false;
@@ -1043,7 +1045,7 @@ void RemoteView::click(int x, int y) {
 void RemoteView::drawRows(std::vector<std::string> names, std::vector<std::string> values,
                           std::string heading) {
     ui_.text(46, 160, heading, 15, MUTED, 790);
-    for (int i = scroll_; i < std::min(scroll_ + layout().rows(), int(names.size())); ++i) {
+    for (int i = scroll_; i < std::min(scroll_ + listRows(), int(names.size())); ++i) {
         int y = 182 + (i - scroll_) * 48;
         bool active = i == selected_ && !controls_;
         if (active)
@@ -1160,8 +1162,8 @@ void RemoteView::draw() {
         const char *tabs[] = {"Sources", "Library", "Equalizer", "Settings", "Remote"};
         for (int i = 0; i < 5; ++i)
             ui_.button(28 + i * 154, 90, 142, 48, tabs[i], page_ == i);
-        ui_.rect(28, 155, 828, layout().panelHeight(), PANEL);
-        ui_.rect(876, 155, 376, layout().panelHeight(), PANEL);
+        ui_.rect(28, 155, 828, (445 + layout().extraHeight()), PANEL);
+        ui_.rect(876, 155, 376, (445 + layout().extraHeight()), PANEL);
         std::vector<std::string> names, values;
         std::string heading;
         if (formOpen_) {

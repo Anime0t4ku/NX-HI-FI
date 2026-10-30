@@ -1,0 +1,25 @@
+# Optional Linux application integration tests; never used by the Switch build.
+CXX ?= c++
+CC ?= cc
+BUILD := build-host/gui
+CPPFLAGS += -DSDL_MAIN_HANDLED -Iinclude -Ithird_party -Ithird_party/libsmb2/include $(HOST_EXTRA_CFLAGS)
+CXXFLAGS += -std=c++17 -O1 -pthread
+SOURCES := $(filter-out source/main.cpp,$(wildcard source/*.cpp))
+OBJECTS := $(patsubst source/%.cpp,$(BUILD)/%.o,$(SOURCES))
+HOST_SMB_LIB ?= -lsmb2
+HOST_EXTRA_LIBS ?= -lSDL2 -lSDL2_image -lSDL2_ttf -lpng -ljpeg -lcurl
+$(BUILD)/%.o: source/%.cpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+$(BUILD)/%.o: source/%.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CPPFLAGS) -O1 -c $< -o $@
+$(BUILD)/app_gui_test.o: tests/app_gui_test.cpp source/main.cpp $(wildcard include/*.hpp include/*.inc) tests/host_switch.hpp
+	@mkdir -p $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+build-host/nx-hifi-gui-test: $(BUILD)/app_gui_test.o $(OBJECTS) $(BUILD)/decoder.o $(BUILD)/cover_codec.o
+	$(CXX) -pthread $^ $(HOST_SMB_LIB) $(HOST_EXTRA_LIBS) -lm -lz -ldl -o $@
+.PHONY: test-player
+test-player: build-host/nx-hifi-gui-test
+	./build-host/nx-hifi-gui-test
+-include $(OBJECTS:.o=.d) $(BUILD)/app_gui_test.d

@@ -10,7 +10,7 @@
 #include <vector>
 
 namespace nxh {
-constexpr const char *Version = "1.1.0";
+constexpr const char *Version = "1.2.0";
 struct Share {
     std::string name, server, share, folder, user, password, domain;
     bool guest = false;
@@ -27,8 +27,8 @@ struct Settings {
     bool preferFolderArt = false, visualizer = true, rememberShuffleRepeat = true;
     bool wrapNavigation = true, holdRepeat = true, remoteEnabled = false;
     int screensaverSeconds = 0, remotePort = 8182;
-    int volume = 80;
-    bool shuffle = false, gaplessPlayback = true;
+    int volume = 100;
+    bool shuffle = false, gaplessPlayback = true, autoFullscreen = false;
     int repeat = 0;
     bool eqEnabled = false;
     std::array<float, 5> eq{};

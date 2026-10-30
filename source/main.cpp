@@ -1,3 +1,6 @@
+#include "input_timing.hpp"
+#include "player_navigation.hpp"
+#include "settings_navigation.hpp"
 #include "playback_diagnostics.hpp"
 #include "loader.hpp"
 #include "player.hpp"
@@ -12,7 +15,9 @@
 #include <ctime>
 #include <arpa/inet.h>
 #include <cstring>
+#ifndef NXH_APP_TEST
 #include <switch.h>
+#endif
 #include <sys/stat.h>
 using namespace nxh;
 static const std::string ConfigPath = "sdmc:/switch/nx-hifi/config.json";
@@ -47,6 +52,7 @@ class App {
     SDL_Renderer *renderer;
     Player &player;
     Settings settings;
+    std::string settingsPath;
     std::unique_ptr<RemoteView> targetView;
     std::vector<std::future<void>> retiredClients;
     bool clientEditing = false;
@@ -177,7 +183,31 @@ class App {
             ui.button(170, 170 + (i - first) * 48, 940, 42, optionLabels[i], i == optionIndex);
     }
     bool sourceSelected = false, controlsFocused = false;
+    SettingsNavigation settingsNavigation;
     int control = 0;
+    PlayerNavigation menuFocus,fullFocus{2,1};
+    PlayerNavigation &playerFocus(){return fullscreen?fullFocus:menuFocus;}
+    const PlayerNavigation &playerFocus()const{return fullscreen?fullFocus:menuFocus;}
+    PlayerRect seekRect()const{return playerSeekRect(fullscreen,layout().extraHeight(),playerX(),playerWidth());}
+    PlayerRect volumeRect()const{return playerVolumeRect(fullscreen,layout().extraHeight(),playerX(),playerWidth());}
+    void syncPlayerFocus(){seekerFocused=(fullscreen||controlsFocused)&&playerFocus().seek();control=std::max(0,playerFocus().action(fullscreen));}
+    void playerVertical(int delta){playerFocus().vertical(fullscreen,delta);syncPlayerFocus();}
+    void playerHorizontal(int delta){
+        if(playerFocus().seek())player.seek(delta*10);
+        else if(playerFocus().volume(fullscreen)){settings.volume=std::clamp(settings.volume+delta*5,0,100);persist();}
+        else playerFocus().horizontal(fullscreen,delta);
+        syncPlayerFocus();
+    }
+    void playerAction(){
+        int action=playerFocus().action(fullscreen);
+        if(action==6){
+            std::vector<nlohmann::json> values{-1};std::vector<std::string> labels{"Off"};int current=-1;
+            for(int i=0;i<int(presets.size());i++){values.push_back(i);labels.push_back(presets[i].name);if(settings.eqEnabled&&settings.eq==presets[i].gains)current=i;}
+            choose("Equalizer preset",values,labels,current,[this](auto v){int index=v.template get<int>();settings.eqEnabled=index>=0;if(index>=0)settings.eq=presets[index].gains;persist();});
+        }
+        else if(action==7)toggleFullscreen();
+        else if(action>=0)transport(action);
+    }
     bool colourPicking = false, scrubbing = false, mouseScrub = false;
     SDL_FingerID scrubFinger = 0;
     int colourSelection = 0, colourDrag = -1;
@@ -273,21 +303,22 @@ class App {
         return "Custom  " + settings.accent;
     }
     bool scrubHit(int x, int y) const {
-        return fullscreen && inside(x, y, playerX(), layout().fullY(493), playerWidth(), 67);
+        return seekRect().contains(x,y);
     }
     void previewScrub(int x) {
         auto p = player.snapshot();
         if (p.duration > 0)
             scrubPosition =
-                std::clamp((x - playerX()) / double(playerWidth()), 0., 1.) * p.duration;
+                std::clamp((x - seekRect().x) / double(seekRect().w), 0., 1.) * p.duration;
     }
     bool beginScrub(int x, int y) {
         auto p = player.snapshot();
         if (!scrubHit(x, y) || p.duration <= 0 || (!p.playing && !p.busy))
             return false;
         scrubbing = true;
+        playerFocus().row=0;playerFocus().column=0;
         seekerFocused = true;
-        controlsFocused = false;
+        controlsFocused = true;
         scrubTrack = p.track.path;
         previewScrub(x);
         return true;
@@ -302,21 +333,13 @@ class App {
         scrubbing = false;
         mouseScrub = false;
     }
-    bool fullscreen = false, focusBeforeFullscreen = false;
+    bool fullscreen = false;
     void toggleFullscreen() {
-        if (colourPicking)
-            return;
-        seekerFocused = false;
-        scrubbing = false;
-        mouseScrub = false;
-        if (!fullscreen) {
-            focusBeforeFullscreen = controlsFocused;
-            fullscreen = true;
-            controlsFocused = true;
-        } else {
-            fullscreen = false;
-            controlsFocused = focusBeforeFullscreen;
-        }
+        if(colourPicking)return;
+        fullscreen=!fullscreen;scrubbing=mouseScrub=false;
+        controlsFocused=fullscreen;
+        if(fullscreen)fullFocus={2,1};
+        syncPlayerFocus();
     }
     Source source;
     std::string folder, status, artKey;
@@ -522,6 +545,7 @@ class App {
                 return fail("Track no longer exists.");
             playbackTrace("main.remote-play.validated", tracks.size());
             player.play(std::move(tracks), selected);
+            if(settings.autoFullscreen&&!fullscreen)toggleFullscreen();
             playbackTrace("main.remote-play.returned");
         } else if (op == "playpause")
             player.pause();
@@ -717,10 +741,9 @@ class App {
         return value.is_string() ? value.get<std::string>() : value.dump();
     }
     void settingAction(int = 1) {
+        if (!settingsNavigation.entries) return;
         auto fields = settingFields();
-        if (selected < 0 || selected >= int(fields.size()))
-            return;
-        auto field = fields[selected];
+        auto field = fields[settingsNavigation.fieldIndex()];
         std::string key = field["key"], kind = field["kind"];
         if (kind == "info")
             return;
@@ -779,19 +802,21 @@ class App {
     int cooldown = 0;
     double touchY = -1;
     bool gesture = false;
-    int repeatFrames = 0;
+    ButtonRepeat verticalRepeat, horizontalRepeat;
+    int repeatFrames = 0; // The existing remote connection/scan dialogs own this repeat state.
     void changePage(int p) {
         page = p;
         clientEditing = false;
         controlsFocused = false;
         editing = false;
         colourPicking = false;
+        settingsNavigation.entries = false;
         selected = scroll = 0;
         status = "";
     }
     bool persist() {
         std::string error;
-        bool ok = saveSettings(ConfigPath, settings, error);
+        bool ok = saveSettings(settingsPath, settings, error);
         if (!ok)
             status = error;
         player.settings(settings);
@@ -832,6 +857,7 @@ class App {
                 tracks.push_back({source, entry.path, source.root == DiscRoot ? entry.name : title(entry.name)});
             }
         player.play(std::move(tracks), index);
+        if(settings.autoFullscreen&&!fullscreen)toggleFullscreen();
         status = "";
     }
     void saveShare() {
@@ -945,7 +971,7 @@ class App {
             return;
         }
         if (fullscreen || controlsFocused) {
-            player.seek(-delta * 5);
+            playerVertical(delta);
             return;
         }
         if (colourPicking) {
@@ -956,6 +982,10 @@ class App {
                 colourSelection = delta < 0 && colourSelection == 10
                                       ? 5
                                       : std::clamp(colourSelection + delta, 10, 15);
+            return;
+        }
+        if (page == 3) {
+            settingsNavigation.move(delta, layout().rows());
             return;
         }
         int count = maxSelection() + 1;
@@ -1019,7 +1049,7 @@ class App {
             return;
         }
         if (controlsFocused || fullscreen) {
-            transport(control);
+            playerAction();
             return;
         }
         if (editing) {
@@ -1072,7 +1102,8 @@ class App {
             }
             return;
         }
-        settingAction();
+        if (page == 3 && !settingsNavigation.entries) settingsNavigation.entries = true;
+        else settingAction();
     }
 
     void adjust(int dir) {
@@ -1081,9 +1112,7 @@ class App {
             return;
         }
         if (fullscreen || controlsFocused) {
-            seekerFocused = false;
-            controlsFocused = true;
-            control = (control + dir + 10) % 10;
+            playerHorizontal(dir);
             return;
         }
         if (!editing && (page == 0 || page == 1)) {
@@ -1139,7 +1168,11 @@ class App {
             return;
         }
         if (controlsFocused) {
-            controlsFocused = false;
+            controlsFocused = false;seekerFocused=false;
+            return;
+        }
+        if (page == 3 && settingsNavigation.entries) {
+            settingsNavigation.entries = false;
             return;
         }
         if (editing) {
@@ -1201,50 +1234,42 @@ class App {
             }
             return;
         }
-        if (inside(x, y, 804, layout().bottom(635), 66, 46)) {
-            toggleFullscreen();
-            return;
+        auto volume=volumeRect();
+        if(volume.contains(x,y)){
+            controlsFocused=true;playerFocus().row=fullscreen?1:3;playerFocus().column=0;syncPlayerFocus();
+            settings.volume=std::clamp((x-volume.x-65)*100/(volume.w-127),0,100);persist();return;
         }
-        if ((artworkVisible() && !fullscreen &&
-             inside(x, y, layout().compactArtX(), 178, layout().compactArtDesignSize(),
-                    layout().artSize(false))) ||
-            (artworkVisible() && fullscreen &&
-             inside(x, y, 64, 100, 440, layout().artSize(true)))) {
-            toggleFullscreen();
-            return;
+        if(scrubHit(x,y)){
+            controlsFocused=true;playerFocus().row=0;playerFocus().column=0;syncPlayerFocus();
+            auto p=player.snapshot();if(p.duration>0)player.seek(std::clamp((x-seekRect().x)/double(seekRect().w),0.,1.)*p.duration-p.position);return;
         }
-        if (!fullscreen && inside(x, y, 28, 90, 1224, 54)) {
-            int tab = (x - 28) / 154;
-            if (tab < 5)
-                changePage(tab);
-            return;
+        for(int row=fullscreen?2:1;row<=(fullscreen?2:2);row++)
+            for(int col=0;col<PlayerNavigation::count(fullscreen,row);col++)
+                if(playerButtonRect(fullscreen,layout().extraHeight(),row,col).contains(x,y)){
+                    controlsFocused=true;playerFocus()={row,col};syncPlayerFocus();playerAction();return;
+                }
+        if(!fullscreen&&artworkVisible()&&inside(x,y,layout().compactArtX(),182,layout().compactArtDesignSize(),layout().artSize(false))){toggleFullscreen();return;}
+        if(fullscreen)return;
+        if(inside(x,y,28,90,770,54)){
+            int tab=(x-28)/154;if(tab<5)changePage(tab);seekerFocused=false;return;
         }
-        if (inside(x, y, 28, layout().bottom(635), 740, 48)) {
-            seekerFocused = false;
-            control = (x - 28) / 74;
-            controlsFocused = true;
-            transport(control);
-            return;
-        }
-        if (inside(x, y, 980, layout().bottom(635), 250, 48)) {
-            settings.volume = std::clamp((x - 980) * 100 / 250, 0, 100);
-            persist();
-            return;
-        }
-        if (fullscreen) {
-            if (scrubHit(x, y)) {
-                auto p = player.snapshot();
-                if (p.duration > 0)
-                    player.seek(std::clamp((x - playerX()) / double(playerWidth()), 0., 1.) *
-                                    p.duration -
-                                p.position);
+        if (page == 3) {
+            const int row = (y - 182) / 48;
+            if (y < 182 || row >= layout().rows()) return;
+            if (inside(x,y,28,155,220,layout().panelHeight()) && row < int(settingsNavigation.categories.size())) {
+                settingsNavigation.category = row;
+                settingsNavigation.entries = true;
+                controlsFocused = seekerFocused = false;
+            } else if (inside(x,y,264,155,592,layout().panelHeight())) {
+                auto &c = settingsNavigation.categories[settingsNavigation.category];
+                const int target = c.scroll + row;
+                if (target < int(c.fields.size())) {
+                    c.selected = target;
+                    settingsNavigation.entries = true;
+                    controlsFocused = seekerFocused = false;
+                    settingAction();
+                }
             }
-            return;
-        }
-        if (inside(x, y, 900, layout().bottom(540), 328, 25)) {
-            auto p = player.snapshot();
-            if (p.duration > 0)
-                player.seek((x - 900) * p.duration / 328 - p.position);
             return;
         }
         if (inside(x, y, 28, 155, 828, layout().panelHeight())) {
@@ -1296,46 +1321,52 @@ class App {
         }
     }
     void drawFullscreen(const Playback &p) {
-        if (artworkVisible())
-            ui.image(artTexture, 64, 100, 440);
-        int x = playerX(), width = playerWidth();
-        ui.text(x, layout().fullY(112), "NOW PLAYING", 16, MUTED, width);
-        ui.marquee(x, layout().fullY(155), trackTitle(p), 36, TEXT, width, "fullscreen-title");
-        if (!p.details.artist.empty())
-            ui.text(x, layout().fullY(228), p.details.artist, 28, ACCENT, width);
-        ui.text(x, layout().fullY(280), trackAlbum(p), 24, MUTED, width);
-        drawBadges(p, x, layout().fullY(340), width);
-        if (settings.visualizer)
-            for (int i = 0; i < 32; i++) {
-                int height = int(std::clamp(p.spectrum[i], 0.f, 1.f) * 64);
-                ui.rect(x + i * (width / 32), layout().fullY(491) - std::max(2, height),
-                        std::max(3, width / 32 - 7), std::max(2, height), ACCENT);
-            }
-        if (p.count > 0)
-            ui.text(x, layout().fullY(392),
-                    std::to_string(p.index + 1) + " / " + std::to_string(p.count), 17, MUTED);
-        if (seekerFocused)
-            ui.rect(x - 10, layout().fullY(498), width + 20, 30, FOCUS);
-        ui.rect(x, layout().fullY(510), width, 6, LINE);
-        double position = scrubbing ? scrubPosition : p.position;
-        if (p.duration > 0) {
-            int offset = int(width * std::clamp(position / p.duration, 0., 1.));
-            ui.rect(x, layout().fullY(510), offset, 6, ACCENT);
-            ui.rect(x + std::clamp(offset, 5, width - 5) - 5, layout().fullY(510) - 6, 10, 18,
-                    ACCENT);
+        if(artworkVisible())ui.image(artTexture,64,140,400);
+        int x=playerX(),width=playerWidth();
+        ui.text(x,142,"NOW PLAYING",15,MUTED,width);
+        ui.marquee(x,180,trackTitle(p),34,TEXT,width,"fullscreen-title");
+        ui.text(x,238,p.details.artist,25,ACCENT,width);
+        ui.text(x,282,trackAlbum(p),22,MUTED,width);
+        drawBadges(p,x,330,width,16);
+        drawVisualizer(p);
+        if(p.count>0)ui.text(64,artworkVisible()?layout().bottom(490):100,std::to_string(p.index+1)+" / "+std::to_string(p.count),16,MUTED);
+    }
+    void drawVisualizer(const Playback &p) {
+        if (!settings.visualizer) return;
+        const auto area=playerVisualizerRect(fullscreen,layout().extraHeight(),playerX(),playerWidth());
+        UI::Clip clip(ui,area.x,area.y,area.w,area.h);
+        for (int i=0;i<32;++i) {
+            const int height=std::max(2,int(std::clamp(p.spectrum[i],0.f,1.f)*area.h));
+            ui.rect(area.x+i*area.w/32,area.y+area.h-height,
+                    std::max(3,area.w/32-(fullscreen?7:4)),height,ACCENT);
         }
-        ui.text(x, layout().fullY(540),
-                timeLabel(position) + " / " +
-                    (p.duration > 0
-                         ? (p.details.durationEstimated ? "~" : "") + timeLabel(p.duration)
-                         : "--:--"),
-                19, MUTED);
-        ui.text(1095, layout().fullY(540),
-                p.busy      ? "Buffering"
-                : p.paused  ? "Paused"
-                : p.playing ? "Playing"
-                            : "Stopped",
-                18, ACCENT, 121);
+    }
+    void drawSeek(const Playback &p){
+        auto a=seekRect();bool focus=(controlsFocused||fullscreen)&&playerFocus().seek();
+        if(focus){ui.roundedRect(a.x-5,a.y-5,a.w+10,a.h+10,ACCENT,10);ui.roundedRect(a.x-3,a.y-3,a.w+6,a.h+6,PANEL,8);}
+        double position=scrubbing?scrubPosition:p.position;
+        int y=a.y+12;ui.rect(a.x,y,a.w,5,LINE);
+        if(p.duration>0){int offset=int(a.w*std::clamp(position/p.duration,0.,1.));ui.rect(a.x,y,offset,5,ACCENT);ui.rect(a.x+std::clamp(offset,4,a.w-4)-4,y-4,8,13,ACCENT);}
+        ui.text(a.x,a.y+30,timeLabel(position),fullscreen?18:14,MUTED);
+        auto duration=p.duration>0?(p.details.durationEstimated?"~":"")+timeLabel(p.duration):"--:--";
+        ui.rightText(a.x+a.w,a.y+30,duration,fullscreen?18:14,MUTED);
+    }
+    void drawPlayerButtons(const Playback &p){
+        for(int row=fullscreen?2:1;row<=2;row++)for(int col=0;col<PlayerNavigation::count(fullscreen,row);col++){
+            PlayerNavigation item{row,col};int id=item.action(fullscreen);
+            auto a=playerButtonRect(fullscreen,layout().extraHeight(),row,col);
+            bool focus=(fullscreen||controlsFocused)&&playerFocus().row==row&&playerFocus().column==col;
+            bool active=(id==4&&settings.shuffle)||(id==5&&settings.repeat);
+            if(focus)ui.roundedRect(a.x-3,a.y-3,a.w+6,a.h+6,ACCENT,14);
+            ui.roundedRect(a.x,a.y,a.w,a.h,id==1?FOCUS:PANEL);
+            ui.transportIcon(a.x+a.w/2,a.y+a.h/2,fullscreen?(id==1?52:44):(id==1?42:34),id==6?10:id==7?11:id,p.playing&&!p.paused,active||id==1?ACCENT:TEXT,settings.repeat==2);
+            if(active)ui.rect(a.x+a.w/2-10,a.y+a.h-5,20,3,ACCENT);
+        }
+        auto a=volumeRect();bool focus=(controlsFocused||fullscreen)&&playerFocus().volume(fullscreen);
+        if(focus){ui.roundedRect(a.x-4,a.y-4,a.w+8,a.h+8,ACCENT,10);ui.roundedRect(a.x-2,a.y-2,a.w+4,a.h+4,PANEL,8);}
+        ui.text(a.x,a.y,"Volume",14,focus?ACCENT:MUTED);
+        ui.rect(a.x+65,a.y+10,a.w-127,4,LINE);ui.rect(a.x+65,a.y+10,(a.w-127)*settings.volume/100,4,ACCENT);
+        ui.text(a.x+a.w-54,a.y,std::to_string(settings.volume)+"%",14,focus?ACCENT:MUTED,54);
     }
     void drawColours() {
         ui.rect(28, 155, 828, layout().panelHeight(), PANEL);
@@ -1368,62 +1399,32 @@ class App {
         ui.button(52, 531, 360, 44, "Save colour", colourSelection == 14);
         ui.button(432, 531, 380, 44, "Cancel", colourSelection == 15);
     }
-    void drawControls(const Playback &p, const std::string &message) {
-        ui.text(30, layout().bottom(605), message, 16, ACCENT, 1210);
-        ui.rect(0, layout().bottom(630), 1280, 90, FOOTER);
-        for (int i = 0; i < 10; ++i) {
-            bool active = (i == 4 && settings.shuffle) || (i == 5 && settings.repeat);
-            bool focus = controlsFocused && control == i;
-            ui.rect(28 + i * 74, layout().bottom(635), 66, 46, focus ? FOCUS : PANEL);
-            if (focus)
-                ui.rect(28 + i * 74, layout().bottom(679), 66, 2, ACCENT);
-            ui.transportIcon(61 + i * 74, layout().bottom(658), 24, i, p.playing && !p.paused,
-                             active ? ACCENT : TEXT, settings.repeat == 2);
-        }
-        ui.text(980, layout().bottom(635), "Volume " + std::to_string(settings.volume) + "%", 15,
-                MUTED);
-        ui.rect(980, layout().bottom(669), 250, 5, LINE);
-        ui.rect(980, layout().bottom(669), settings.volume * 250 / 100, 5, ACCENT);
-        ui.rect(804, layout().bottom(635), 66, 46, PANEL);
-        for (int side : {-1, 1})
-            for (int vertical : {-1, 1}) {
-                int x = 837 + side * 12, y = layout().bottom(658) + vertical * 12;
-                ui.line(x, y, x - side * 7, y, 2, TEXT);
-                ui.line(x, y, x, y - vertical * 7, 2, TEXT);
-            }
-        std::string hint;
-        if (colourPicking)
-            hint = "D-pad Select   Left/Right Adjust RGB   A Choose/Edit   B Cancel   ZL/ZR "
-                   "Prev/Next   + Play/Pause";
-        else if (controlsFocused || fullscreen) {
-            const char *labels[] = {"Previous",    "Play/Pause", "Next",      "Stop",
-                                    "Shuffle",     "Repeat",     "Seek -10s", "Seek +10s",
-                                    "Volume down", "Volume up"};
-            hint = std::string(labels[control]);
-            if (control == 4)
-                hint += settings.shuffle ? ": On" : ": Off";
-            if (control == 5)
-                hint += settings.repeat == 0   ? ": Off"
-                        : settings.repeat == 1 ? ": Queue"
-                                               : ": One track";
-            hint += fullscreen ? "   Left/Right Select   Up/Down Seek 5s   A Use   - Browse"
-                               : "   Left/Right Select   Up/Down Seek 5s   A Use   - Browse";
-        } else {
-            hint = editing     ? "A Edit/Confirm   B Cancel   D-pad Navigate"
-                   : page == 0 ? "A Open   X Edit source   Left/Right Jump 5"
-                   : page == 2 ? "A Select   Left/Right Adjust   B Back"
-                               : "A Open/Play   B Back   Left/Right Jump 5";
-        }
-        if (!colourPicking)
-            hint += fullscreen
-                        ? "   L/R Tabs   ZL/ZR Prev/Next   + Play/Pause"
-                        : "   - Controls   L/R Tabs   R3 Player   ZL/ZR Prev/Next   + Play/Pause";
-        ui.text(28, layout().bottom(692), hint, 14, MUTED, 1224);
+    void drawControls(const Playback &p,const std::string &message){
+        if(!colourPicking){drawSeek(p);drawPlayerButtons(p);}
+        // Status/errors stay visible outside the compact controls-only footer.
+        if(!message.empty())ui.text(fullscreen?30:600,fullscreen?90:64,message,13,ACCENT,fullscreen?1210:620);
+        ui.rect(0,layout().footerY(),1280,layout().footerHeight(),FOOTER);
+        int x=28,y=layout().footerY()+8;
+        auto hint=[&](const char *button,const std::string &action){x=ui.padHint(x,y,button,action);};
+        if(optionApply){hint("Dpad","Navigate");hint("A","Select");hint("B","Back");return;}
+        if(colourPicking){hint("Dpad","Colour");hint("A","Choose");hint("B","Cancel");return;}
+        if(fullscreen||controlsFocused){
+            const char *labels[]={"Previous","Play/Pause","Next","Stop","Shuffle","Repeat","Equalizer","Fullscreen"};
+            auto &focus=playerFocus();int id=focus.action(fullscreen);
+            hint("Dpad",focus.seek()?"Seek 10s":focus.volume(fullscreen)?"Volume":"Navigate");
+            if(id>=0)hint("A",labels[id]);
+            hint("B",fullscreen?"Close":"Browse");
+        }else{hint("Dpad","Navigate");hint("A",page==3?(settingsNavigation.entries?"Change":"Select"):editing?"Edit":"Open");hint("B",page==3&&settingsNavigation.entries?"Categories":"Back");if(page==0)hint("X","Edit source");if(page==4)hint("X","Edit client");}
+        if(!fullscreen){hint("-","Player");hint("L","");hint("R","Tabs");hint("R3","Fullscreen");}
+        hint("+","Play/Pause");
+        if(fullscreen){hint("L","");hint("R","Track");hint("ZL","");hint("ZR","Track");}
     }
 
   public:
-    App(UI &u, SDL_Renderer *r, Player &p, Settings s, std::string error)
-        : ui(u), renderer(r), player(p), settings(std::move(s)), status(std::move(error)) {
+    App(UI &u, SDL_Renderer *r, Player &p, Settings s, std::string error,
+        std::string settingsFile = ConfigPath)
+        : ui(u), renderer(r), player(p), settings(std::move(s)),
+          settingsPath(std::move(settingsFile)), status(std::move(error)) {
         source = {false, {}, settings.musicRoot};
         page = status.empty() ? 0 : 3;
         setAppearance(settings.theme, settings.accent);
@@ -1564,47 +1565,33 @@ class App {
             cooldown--;
             return;
         }
-        if (!colourPicking && (down & HidNpadButton_StickR))
+        if (!colourPicking && !optionApply && (down & HidNpadButton_StickR))
             toggleFullscreen();
 
-        if (!colourPicking && !optionApply && (down & HidNpadButton_L)) {
+        if (!fullscreen && !colourPicking && !optionApply && (down & HidNpadButton_L)) {
             fullscreen = false;
             changePage((page + 4) % 5);
         }
-        if (!colourPicking && !optionApply && (down & HidNpadButton_R)) {
+        if (!fullscreen && !colourPicking && !optionApply && (down & HidNpadButton_R)) {
             fullscreen = false;
             changePage((page + 1) % 5);
         }
         bool up = held & (HidNpadButton_Up | HidNpadButton_StickLUp),
              dn = held & (HidNpadButton_Down | HidNpadButton_StickLDown);
-        if (up || dn) {
-            if (repeatFrames == 0 || (repeatFrames > 20 && repeatFrames % 5 == 0))
-                move(up ? -1 : 1);
-            repeatFrames++;
-        } else
-            repeatFrames = 0;
+        int vertical=up?-1:dn?1:0;
+        if(verticalRepeat.fire(vertical,down&(HidNpadButton_Up|HidNpadButton_Down|HidNpadButton_StickLUp|HidNpadButton_StickLDown),SDL_GetTicks64()))move(vertical);
         if (down & HidNpadButton_A)
             action();
         if (down & HidNpadButton_B)
             back();
         bool left = held & HidNpadButton_Left, right = held & HidNpadButton_Right;
-        if (left || right) {
-            if (horizontalFrames == 0 || (horizontalFrames > 20 && horizontalFrames % 6 == 0))
-                adjust(left ? -1 : 1);
-            ++horizontalFrames;
-        } else
-            horizontalFrames = 0;
-        if (down & HidNpadButton_ZL)
-            player.previous();
-        if (down & HidNpadButton_ZR)
-            player.next();
+        int horizontal=left?-1:right?1:0;
+        if(horizontalRepeat.fire(horizontal,down&(HidNpadButton_Left|HidNpadButton_Right),SDL_GetTicks64()))adjust(horizontal);
+        if (down & (HidNpadButton_ZL | (fullscreen ? HidNpadButton_L : 0))) player.previous();
+        if (down & (HidNpadButton_ZR | (fullscreen ? HidNpadButton_R : 0))) player.next();
         if (!colourPicking && !optionApply && (down & HidNpadButton_Minus)) {
-            if (fullscreen) {
-                fullscreen = false;
-                controlsFocused = false;
-            } else
-                controlsFocused = !controlsFocused;
-            seekerFocused = false;
+            if(fullscreen)toggleFullscreen();
+            else {controlsFocused=!controlsFocused;syncPlayerFocus();}
         }
         if (!colourPicking && (down & HidNpadButton_X)) {
             if (!fullscreen && page == 4 && !clientEditing) {
@@ -1658,6 +1645,11 @@ class App {
             if (e.type == SDL_FINGERDOWN) {
                 touchY = e.tfinger.y * layout().height();
                 gesture = false;
+                if (!fullscreen && !colourPicking && !optionApply &&
+                    touchY >= 182 && touchY < 155 + layout().panelHeight() && e.tfinger.x * 1280 < 856) {
+                    controlsFocused = seekerFocused = false;
+                    if (page == 3) settingsNavigation.entries = e.tfinger.x * 1280 >= 264;
+                }
                 if (beginColourDrag(e.tfinger.x * 1280, e.tfinger.y * layout().height())) {
                     colourFinger = e.tfinger.fingerId;
                     gesture = true;
@@ -1816,7 +1808,8 @@ class App {
             mouseScrub = false;
         }
     }
-    void draw() {
+    void draw() { draw(player.snapshot()); }
+    void draw(const Playback &p) {
         if (connectionOpen) {
             drawConnection();
             return;
@@ -1832,7 +1825,6 @@ class App {
         }
         setAppearance(settings.theme, colourPicking ? colourHex(customRGB) : settings.accent);
         ui.begin();
-        auto p = player.snapshot();
         if (sleeping) {
             ui.rect(0, 0, 1280, layout().height(), {0, 0, 0});
             if (settings.showClock)
@@ -1853,8 +1845,23 @@ class App {
         for (int i = 0; i < 5; i++)
             ui.button(28 + i * 154, 90, 142, 48, tabs[i], page == i);
 
-        ui.rect(28, 155, 828, layout().panelHeight(), PANEL);
+        if (page == 3) {
+            ui.rect(28, 155, 220, layout().panelHeight(), PANEL);
+            ui.rect(264, 155, 592, layout().panelHeight(), PANEL);
+            ui.text(46, 160, "CATEGORIES", 15, MUTED, 184);
+            for (int i = 0; i < int(settingsNavigation.categories.size()); ++i) {
+                const int y = 182 + i * 48;
+                const bool current = i == settingsNavigation.category;
+                const bool focus = current && !settingsNavigation.entries && !controlsFocused;
+                UI::Clip clip(ui, 40, y, 196, 44);
+                if (current) ui.rect(40, y, 196, 44, FOCUS);
+                if (focus) ui.rect(40, y, 4, 44, ACCENT);
+                ui.text(52, y + 9, settingsNavigation.categories[i].name, 20,
+                        focus ? ACCENT : TEXT, 172);
+            }
+        } else ui.rect(28, 155, 828, layout().panelHeight(), PANEL);
         ui.rect(876, 155, 376, layout().panelHeight(), PANEL);
+
         std::vector<std::string> names, values;
         std::string heading;
         if (page == 4) {
@@ -1932,70 +1939,52 @@ class App {
             }
             values.push_back("");
         } else {
-            heading = "APP SETTINGS";
-            for (auto &field : settingFields()) {
-                names.push_back(field["group"].get<std::string>() + " / " +
-                                field["label"].get<std::string>());
+            heading = settingsNavigation.current().name;
+            const auto fields = settingFields();
+            for (int index : settingsNavigation.current().fields) {
+                const auto &field = fields[index];
+                names.push_back(field["label"].get<std::string>());
                 values.push_back(settingText(field));
             }
         }
-        ui.text(46, 160, heading, 15, MUTED, 790);
+        const bool settingsPage = page == 3;
+        const int listX = settingsPage ? 280 : 40, listW = settingsPage ? 560 : 804;
+        const int textX = listX + 17;
+        const int rowScroll = settingsPage ? settingsNavigation.current().scroll : scroll;
+        const int rowSelected = settingsPage ? settingsNavigation.current().selected : selected;
+        const bool listFocused = !controlsFocused && (!settingsPage || settingsNavigation.entries);
+        ui.text(settingsPage ? 282 : 46, 160, heading, 15, MUTED, settingsPage ? 550 : 790);
         for (int row = 0; row < layout().rows(); row++) {
-            int index = scroll + row;
+            int index = rowScroll + row;
             if (index >= int(names.size()))
                 break;
             int y = 182 + row * 48;
-            if (!controlsFocused && selected == index) {
-                ui.rect(40, y, 804, 44, FOCUS);
-                ui.rect(40, y, 4, 44, ACCENT);
+            UI::Clip clip(ui, listX, y, listW, 44);
+            if (listFocused && rowSelected == index) {
+                ui.rect(listX, y, listW, 44, FOCUS);
+                ui.rect(listX, y, 4, 44, ACCENT);
             }
-            bool active = !controlsFocused && selected == index;
+            bool active = listFocused && rowSelected == index;
             bool hasValue = index < int(values.size()) && !values[index].empty();
             // Every tab uses the entire row; secondary details sit below its title.
-            ui.text(57, y + (hasValue ? 2 : 9), names[index], hasValue ? 20 : 21,
-                    active ? ACCENT : TEXT, hasValue && page == 1 ? 640 : 770);
+            ui.text(textX, y + (hasValue ? 2 : 9), names[index], hasValue ? 20 : 21,
+                    active ? ACCENT : TEXT, settingsPage ? 526 : hasValue && page == 1 ? 640 : 770);
             if (hasValue) {
                 if (page == 1 && !editing)
                     ui.text(713, y + 11, values[index], 17, MUTED, 110);
                 else
-                    ui.text(57, y + 25, values[index], 14, MUTED, 770);
+                    ui.text(textX, y + 25, values[index], 14, MUTED, settingsPage ? 526 : 770);
             }
         }
         if (loading)
             ui.text(57, 240, "Loading...", 25, ACCENT);
         else if (names.empty())
             ui.text(57, 240, "Open Sources to select your music.", 23, MUTED, 750);
-        if (artworkVisible())
-            ui.image(artTexture, layout().compactArtX(), 178, layout().compactArtDesignSize());
-        ui.marquee(900, artworkVisible() ? layout().compactTitleY() : 178, trackTitle(p), 25, TEXT,
-                   328, "compact-title");
-        ui.text(900, artworkVisible() ? layout().compactTitleY() + 39 : 224,
-                !p.details.artist.empty() ? p.details.artist : trackAlbum(p), 17, MUTED, 328);
-        int badgeY = artworkVisible() ? layout().compactTitleY() + 67 : 263;
-        if (layout().docked && !p.track.path.empty() && !p.details.artist.empty()) {
-            ui.text(900, badgeY, trackAlbum(p), 17, MUTED, 328);
-            badgeY += 31;
-        }
-        drawBadges(p, 900, badgeY, 328, 13);
-        if (settings.visualizer)
-            for (int i = 0; i < 32; i++) {
-                float level = p.spectrum[i];
-                ui.rect(902 + i * 10, layout().bottom(516) - int(level * 18), 6,
-                        std::max(2, int(level * 18)), ACCENT);
-            }
-        ui.rect(900, layout().bottom(548), 328, 5, LINE);
-        if (p.duration > 0)
-            ui.rect(900, layout().bottom(548),
-                    int(328 * std::clamp(p.position / p.duration, 0., 1.)), 5, ACCENT);
-        ui.text(900, layout().bottom(563),
-                timeLabel(p.position) + " / " + (p.duration > 0 ? timeLabel(p.duration) : "--:--"),
-                16, MUTED);
-        ui.text(1085, layout().bottom(563),
-                p.busy      ? "Buffering"
-                : p.paused  ? "Paused"
-                : p.playing ? "Playing"
-                            : "Stopped",
-                16, ACCENT);
+        if(artworkVisible())ui.image(artTexture,layout().compactArtX(),182,layout().compactArtDesignSize());
+        ui.marquee(900,artworkVisible()?layout().compactTitleY():190,trackTitle(p),22,TEXT,328,"compact-title");
+        ui.text(900,artworkVisible()?layout().compactTitleY()+34:228,!p.details.artist.empty()?p.details.artist:trackAlbum(p),16,MUTED,328);
+        drawBadges(p,900,artworkVisible()?layout().compactTitleY()+65:265,328,12);
+        drawVisualizer(p);
         if (colourPicking)
             drawColours();
         auto message = !p.error.empty() ? p.error : status;
@@ -2004,6 +1993,7 @@ class App {
         finishFrame();
     }
 };
+#ifndef NXH_APP_TEST
 int main(int, char **) {
     Result net = socketInitializeDefault();
     Result fonts = plInitialize(PlServiceType_User);
@@ -2011,7 +2001,7 @@ int main(int, char **) {
     Settings settings;
     settings.musicRoot = "sdmc:/music";
     std::string error;
-    playbackTrace("boot.physical-disc-1.1.0", 0, true);
+    playbackTrace("boot.gui-1.2.0", 0, true);
     loadSettings(ConfigPath, settings, error);
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS) < 0) {
         consoleInit(nullptr);
@@ -2109,3 +2099,4 @@ int main(int, char **) {
         socketExit();
     return 0;
 }
+#endif

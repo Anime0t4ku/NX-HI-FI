@@ -23,3 +23,10 @@ ${CXX:-c++} -O1 -std=c++17 -Iinclude -Ithird_party source/core.cpp source/remote
 
 ${CXX:-c++} -O1 -std=c++17 -Iinclude -Ithird_party tests/mister_remote_test.cpp -o build-host/mister-remote-test
 ./build-host/mister-remote-test
+
+for name in natural_sort player_navigation settings_navigation; do
+    ${CXX:-c++} -O1 -std=c++17 -Iinclude -Ithird_party source/core.cpp "tests/${name}_test.cpp" -lpthread -o "build-host/$name-test"
+    "./build-host/$name-test"
+done
+${CXX:-c++} -O1 -std=c++17 -Iinclude tests/input_timing_test.cpp -o build-host/input-timing-test
+./build-host/input-timing-test

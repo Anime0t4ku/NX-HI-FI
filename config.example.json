@@ -1,6 +1,6 @@
 {
   "music_root": "sdmc:/music",
-  "volume": 80,
+  "volume": 100,
   "shuffle": false,
   "repeat": 0,
   "eq_enabled": false,
@@ -25,5 +25,6 @@
   "screensaver_seconds": 0,
   "remote_enabled": false,
   "remote_port": 8182,
-  "remote_clients": []
+  "remote_clients": [],
+  "auto_fullscreen": false
 }
