@@ -10,7 +10,14 @@
 #include <vector>
 
 namespace nxh {
-constexpr const char *Version = "1.2.0";
+constexpr const char *Version = "1.3.0";
+inline nlohmann::json remoteIdentity(){
+    return {{"app_id","nx-hifi"},{"name","NX Hi-Fi"},{"platform","switch"},
+        {"version",Version},{"protocol_version",1},
+        {"capabilities",{{"independent_control",true},{"screen_control",true},
+            {"settings_schema",true},{"dynamic_sources",true},{"source_management",true},
+            {"equalizer",true},{"listening_mode",true},{"outgoing_remote",true}}}};
+}
 struct Share {
     std::string name, server, share, folder, user, password, domain;
     bool guest = false;
@@ -29,6 +36,7 @@ struct Settings {
     int screensaverSeconds = 0, remotePort = 8182;
     int volume = 100;
     bool shuffle = false, gaplessPlayback = true, autoFullscreen = false;
+    bool listeningHideTitle=true,listeningHideClock=true,listeningHideMetadata=true,listeningHideFooter=true;
     int repeat = 0;
     bool eqEnabled = false;
     std::array<float, 5> eq{};

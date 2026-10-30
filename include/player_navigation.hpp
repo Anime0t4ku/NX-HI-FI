@@ -19,16 +19,12 @@ struct PlayerNavigation {
     }
 };
 struct PlayerRect{int x,y,w,h;bool contains(int px,int py)const{return px>=x&&py>=y&&px<x+w&&py<y+h;}};
-inline PlayerRect playerSeekRect(bool full,int extra,int rightX,int rightW){return full?PlayerRect{rightX,370+extra,rightW,32}:PlayerRect{900,399+extra,328,32};}
-inline PlayerRect playerVolumeRect(bool full,int extra,int rightX,int rightW){return full?PlayerRect{rightX,455+extra,rightW,42}:PlayerRect{900,615+extra,328,30};}
-// Separate from metadata/seek: between volume and transport in fullscreen,
-// and between the secondary transport row and volume in the mini player.
-inline PlayerRect playerVisualizerRect(bool full,int extra,int rightX,int rightW){
-    return full?PlayerRect{rightX,509+extra,rightW,47}:PlayerRect{900,583+extra,328,20};
-}
+inline PlayerRect playerSeekRect(bool full,int extra,int rightX,int rightW){return full?PlayerRect{rightX,415+extra,rightW,32}:PlayerRect{900,422+extra,328,32};}
+inline PlayerRect playerVolumeRect(bool full,int extra,int rightX,int rightW){return full?PlayerRect{rightX,495+extra,rightW,42}:PlayerRect{900,615+extra,328,30};}
+inline PlayerRect playerVisualizerRect(bool full,int extra,int x,int w){return full?PlayerRect{x,365+extra,w,42}:PlayerRect{900,392+extra,328,22};}
 inline PlayerRect playerButtonRect(bool full,int extra,int row,int column){
     if(full)return {64+column*164,568+extra,152,76};
-    if(row==1){constexpr int x[]={916,1006,1120},w[]={70,98,70};return {x[column],448+extra+(column==1?0:8),w[column],column==1?66:50};}
-    return {900+column*84,527+extra,76,44};
+    if(row==1){constexpr int x[]={916,1006,1120},w[]={70,98,70};return {x[column],470+extra+(column==1?0:8),w[column],column==1?66:50};}
+    return {900+column*84,546+extra,76,44};
 }
 }

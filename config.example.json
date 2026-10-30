@@ -26,5 +26,9 @@
   "remote_enabled": false,
   "remote_port": 8182,
   "remote_clients": [],
-  "auto_fullscreen": false
+  "auto_fullscreen": false,
+  "listening_hide_title": true,
+  "listening_hide_clock": true,
+  "listening_hide_metadata": true,
+  "listening_hide_footer": true
 }

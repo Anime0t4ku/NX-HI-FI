@@ -111,7 +111,7 @@ bool validateRemoteClient(const RemoteClientConfig &c, std::string &error) {
         c.host.find_first_not_of(
             "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-") !=
             std::string::npos ||
-        c.port != 8182 || (c.type != "nx" && c.type != "mister")) {
+        c.port != 8182 || (c.type != "nx" && c.type != "mister" && c.type != "prospero")) {
         error = "Enter a name, host/IP and client type. Port is fixed at 8182.";
         return false;
     }
@@ -151,6 +151,10 @@ nlohmann::json settingsDocument(const Settings &s, bool secrets) {
             {"prefer_folder_art", s.preferFolderArt},
             {"visualizer", s.visualizer},
             {"auto_fullscreen", s.autoFullscreen},
+            {"listening_hide_footer",s.listeningHideFooter},
+            {"listening_hide_metadata",s.listeningHideMetadata},
+            {"listening_hide_clock",s.listeningHideClock},
+            {"listening_hide_title",s.listeningHideTitle},
             {"remember_shuffle_repeat", s.rememberShuffleRepeat},
             {"gapless_playback", s.gaplessPlayback},
             {"wrap_navigation", s.wrapNavigation},
@@ -187,6 +191,10 @@ nlohmann::json settingFields() {
     add("hide_missing_art", "Hide missing artwork placeholder", "Artwork", "bool");
     add("prefer_folder_art", "Prefer folder artwork", "Artwork", "bool");
     add("visualizer", "Show visualizer", "Visualizer", "bool");
+    add("listening_hide_title","Hide app title and version","Listening Mode","bool");
+    add("listening_hide_clock","Hide clock","Listening Mode","bool");
+    add("listening_hide_metadata","Hide technical metadata","Listening Mode","bool");
+    add("listening_hide_footer","Hide footer","Listening Mode","bool");
     add("auto_fullscreen", "Auto Fullscreen", "Playback", "bool");
     add("gapless_playback", "Gapless audio CD playback", "Playback", "bool");
     add("remember_shuffle_repeat", "Remember shuffle / repeat", "Playback", "bool");
@@ -209,6 +217,10 @@ bool patchSettings(Settings &s, const nlohmann::json &patch, std::string &error)
         bool *flag = nullptr;
         if (key == "auto_fullscreen")
             flag = &next.autoFullscreen;
+        else if(key=="listening_hide_title")flag=&next.listeningHideTitle;
+        else if(key=="listening_hide_clock")flag=&next.listeningHideClock;
+        else if(key=="listening_hide_metadata")flag=&next.listeningHideMetadata;
+        else if(key=="listening_hide_footer")flag=&next.listeningHideFooter;
         else if (key == "show_clock")
             flag = &next.showClock;
         else if (key == "clock_24h")

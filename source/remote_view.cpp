@@ -48,10 +48,11 @@ std::string timeText(double t) {
 }
 } // namespace
 RemoteView::RemoteView(UI &ui, SDL_Renderer *r, RemoteClientConfig config, Keyboard keyboard,
-                       std::vector<RemoteClientConfig> clients, bool screen)
+                       std::vector<RemoteClientConfig> clients, bool screen,Settings localSettings)
     : ui_(ui), renderer_(r), client_(std::make_unique<ClientSession>(config, screen)),
       keyboard_(std::move(keyboard)), clients_(std::move(clients)),
-      screenMode_(screen && config.type == "nx"), mister_(config.type == "mister") {
+      screenMode_(screen && config.type != "mister"), mister_(config.type == "mister") {
+    localSettings_=std::move(localSettings);hostType_=config.type;
     status_ = "Connecting to " + config.name + "...";
     if (mister_) {
         loadMetadata();
@@ -118,10 +119,13 @@ void RemoteView::normalize() {
         if (!state_.is_object() || !state_.contains("settings"))
             return;
         settings_ = state_["settings"];
-        fields_ = state_.value("fields", Json::array());
+        hostType_=hostType(state_,hostType_);hostVersion_=state_.value("version",std::string{});
+        allFields_ = state_.value("fields", Json::array());
+        if(hostCapability(state_,"listening_mode")){allFields_.push_back({{"key","@host_listening"},{"label","Host Listening Mode"},{"group","Listening Mode"},{"kind","bool"}});settings_["@host_listening"]=state_.value("listening_mode",false);}groupFields();
         sources_ = Json::array();
-        sources_.push_back({{"id", -1}, {"name", "SD card"}});
-        if (state_.value("physical_disc", false))
+        if(state_.contains("local_sources")&&state_["local_sources"].is_array())sources_=state_["local_sources"];
+        else sources_.push_back({{"id", -1}, {"name", hostType_=="prospero"?"Internal Storage":"SD card"}});
+        if (!state_.contains("local_sources")&&state_.value("physical_disc", false))
             sources_.push_back({{"id", -2}, {"name", "Physical Disc"}});
         int i = 0;
         for (auto &s : settings_.value("shares", Json::array()))
@@ -133,7 +137,7 @@ void RemoteView::normalize() {
         return;
     if (!protocolReady_)
         status_.clear();
-    protocolReady_ = true;
+    protocolReady_ = true;hostVersion_=raw_.value("version",std::string{});
     settings_ = {{"theme", "dark"},
                  {"accent_colour", "#EF4444"},
                  {"show_artwork", true},
@@ -177,9 +181,7 @@ void RemoteView::normalize() {
         fields_.push_back(d);
     }
     allFields_=fields_;
-    fields_=Json::array();
-    const char *categories[]={"Playback","Appearance","Controls","System","Experimental"};
-    if(settingsCategory_>=0) for(const auto &f:allFields_) if(f.value("group",std::string{})==categories[settingsCategory_])fields_.push_back(f);
+    groupFields();
     settings_["accent_colour"]=cfg.value("accent_colour",std::string("#EF4444"));
     settings_["visualizer"]=true;
     settings_["muted"]=raw_.value("muted",false);
@@ -246,6 +248,7 @@ void RemoteView::update() {
                 changePage(0);
         }
     }
+    selected_=std::clamp(selected_,0,maximum());scroll_=std::clamp(scroll_,std::max(0,selected_-listRows()+1),selected_);
     if (screenMode_) {
         screenFrame_ = raw_.value("screen", Json::object());
         if (!screenFrame_.is_object())
@@ -362,6 +365,7 @@ void RemoteView::command(std::string op, Json body) {
     send("POST", "/api/control", {{"action", op == "repeat" ? "loop" : op}});
 }
 void RemoteView::patch(Json patch) {
+    if(patch.contains("@host_listening")){command("listening_mode",{{"enabled",patch["@host_listening"]}});return;}
     if (!ready())
         return;
     if (!mister_) {
@@ -444,7 +448,7 @@ void RemoteView::browse(std::string source, std::string path, std::string child)
 void RemoteView::changePage(int page) {
     ++navigation_;
     dragging_ = false;
-    page_ = page;
+    page_ = page;settingsCategory_=-1;
     selected_ = scroll_ = 0;
     controls_ = false;
     fullscreen_ = false;
@@ -463,24 +467,33 @@ int RemoteView::maximum() const {
             document_.value(documentKind_ == "smb" ? "shares" : "stations", Json::array()).size());
     }
     if (page_ == 0)
-        return int(sources_.size()) + (mister_ ? 4 : 0);
+        return std::max(0,int(sources_.size())+(canManageSources()?(mister_?5:1):0)-1);
     if (page_ == 1)
         return std::max(0, int(entries_.size()) - 1);
     if (page_ == 2)
         return 7;
     if (page_ == 3) {
-        if(mister_ && settingsCategory_<0)return 4;
+        if(settingsCategory_<0)return std::max(0,int(categories_.size())-1);
         return std::max(0, int(fields_.size()) - 1);
     }
     return int(clients_.size());
 }
+void RemoteView::groupFields(){
+    categories_.clear();for(const auto &f:allFields_){auto name=f.value("group",std::string("General"));if(std::find(categories_.begin(),categories_.end(),name)==categories_.end())categories_.push_back(name);}
+    if(settingsCategory_>=int(categories_.size()))settingsCategory_=-1;
+    const int index=std::clamp(settingsCategory_>=0?settingsCategory_:selected_,0,std::max(0,int(categories_.size())-1));
+    fields_=Json::array();if(categories_.empty())return;
+    for(const auto &f:allFields_)if(f.value("group",std::string("General"))==categories_[index])fields_.push_back(f);
+}
+void RemoteView::toggleFullscreen(){fullscreen_=!fullscreen_;listening_=false;dragging_=false;controls_=fullscreen_;if(fullscreen_)fullFocus_={2,1};}
+int RemoteView::playerAction()const{return (fullscreen_?fullFocus_:menuFocus_).action(fullscreen_);}
 void RemoteView::move(int delta) {
     if (optionApply_) {
         option_ = (option_ + delta % int(options_.size()) + int(options_.size())) % options_.size();
         return;
     }
     if (controls_ || fullscreen_) {
-        seek(-delta * 5);
+        focus().vertical(fullscreen_,delta);
         return;
     }
     int count = maximum() + 1;
@@ -489,6 +502,7 @@ void RemoteView::move(int delta) {
         scroll_ = selected_;
     if (selected_ >= scroll_ + listRows())
         scroll_ = selected_ - listRows() + 1;
+    if(page_==3&&!formOpen_)groupFields();
 }
 void RemoteView::adjust(int delta) {
     if (optionApply_) {
@@ -496,8 +510,9 @@ void RemoteView::adjust(int delta) {
         return;
     }
     if (controls_ || fullscreen_) {
-        int count=mister_?11:10;
-        control_ = (control_ + delta + count) % count;
+        if(focus().seek())seek(delta*5);
+        else if(focus().volume(fullscreen_))command("volume",{{"value",std::clamp(settings_.value("volume",100)+delta*5,0,100)}});
+        else focus().horizontal(fullscreen_,delta);
         return;
     }
     if (page_ == 2 && !formOpen_ && selected_ >= 2 && selected_ <= 6) {
@@ -620,7 +635,7 @@ void RemoteView::action() {
         return;
     }
     if (controls_ || fullscreen_) {
-        transport(control_);
+        int id=playerAction();if(id==7)toggleFullscreen();else if(id==6){std::vector<Json> values;std::vector<std::string> labels;for(const auto &p:presets){values.push_back(p.gains);labels.push_back(p.name);}choose(values,labels,settings_.value("eq",Json{}),[this](auto v){patch({{"eq",v},{"eq_enabled",true}});});}else if(id>=0)transport(id);
         return;
     }
     if (formOpen_) {
@@ -648,9 +663,9 @@ void RemoteView::action() {
         if (selected_ < int(sources_.size())) {
             auto id = sources_[selected_]["id"];
             browse(id.is_string() ? id.get<std::string>() : id.dump(), "");
-        } else if (!mister_)
+        } else if (!mister_&&canManageSources())
             sourceEditor(-1);
-        else {
+        else if(canManageSources()){
             const char *kinds[]={"smb","radio","plex","jellyfin","emby"};
             editDocument(kinds[selected_-int(sources_.size())]);
         }
@@ -670,6 +685,7 @@ void RemoteView::action() {
                 body["sources_revision"] = state_.at("sources_revision");
             }
             command("play", body);
+            if(settings_.value("auto_fullscreen",localSettings_.autoFullscreen)&&!fullscreen_)toggleFullscreen();
         }
         return;
     }
@@ -689,7 +705,7 @@ void RemoteView::action() {
             patch({{"eq", Json::array({0, 0, 0, 0, 0})}});
         return;
     }
-    if(mister_ && page_==3 && settingsCategory_<0){settingsCategory_=selected_;selected_=scroll_=0;normalize();return;}
+    if(page_==3 && settingsCategory_<0){settingsCategory_=selected_;auto saved=settingsPositions_[settingsCategory_];selected_=saved.row;scroll_=saved.scroll;groupFields();selected_=std::clamp(selected_,0,maximum());return;}
     if (page_ == 3 && selected_ < int(fields_.size())) {
         auto f = fields_[selected_];
         std::string key = f["key"];
@@ -716,7 +732,7 @@ void RemoteView::back() {
         selected_ = scroll_ = 0;
         return;
     }
-    if(mister_ && page_==3 && settingsCategory_>=0){selected_=settingsCategory_;settingsCategory_=-1;scroll_=0;normalize();return;}
+    if(page_==3 && settingsCategory_>=0){settingsPositions_[settingsCategory_]={selected_,scroll_,{}};selected_=settingsCategory_;settingsCategory_=-1;scroll_=0;groupFields();return;}
     if (page_ == 1 && !path_.empty() && path_ != "/" && path_ != root_) {
         auto old = path_;
         auto next = mister_ && !parent_.empty() ? parent_ : parent(path_);
@@ -896,56 +912,32 @@ void RemoteView::documentForm(std::string kind, int index) {
                  });
         });
 }
-void RemoteView::buttons(unsigned down, unsigned held) {
-    if (screenMode_) {
-        screenButtons(down, held);
-        return;
+void RemoteView::buttons(unsigned down,unsigned held){
+    if(screenMode_){screenButtons(down,held);return;}
+    blocked_&=held;down&=~blocked_;held&=~blocked_;
+    if(listening_){
+        constexpr unsigned playback=Plus|L|R|ZL|ZR;
+        if(down&~playback){listening_=false;blocked_=down|held;return;}
+        if(down&Plus)command("playpause");if(down&L)command("previous");if(down&R)command("next");if(down&ZL)seek(-5);if(down&ZR)seek(5);return;
     }
-    if (down & Plus)
-        command("playpause");
-    if (down & ZL)
-        command("previous");
-    if (down & ZR)
-        command("next");
-    if (down & Y)
-        command("shuffle");
-    if (down & Minus) {
-        if (fullscreen_) {
-            fullscreen_ = controls_ = false;
-        } else
-            controls_ = !controls_;
-    }
-    if (down & Full) {
-        fullscreen_ = !fullscreen_;
-        controls_ = fullscreen_;
-    }
-    if (!optionApply_) {
-        if (down & L)
-            changePage((page_ + 4) % 5);
-        if (down & R)
-            changePage((page_ + 1) % 5);
-    }
-    if (held & (Up | Down)) {
-        if (repeat_ == 0 || (repeat_ > 20 && repeat_ % 5 == 0))
-            move(held & Up ? -1 : 1);
-        ++repeat_;
-    } else
-        repeat_ = 0;
-    if (held & (Left | Right)) {
-        if (horizontal_ == 0 || (horizontal_ > 20 && horizontal_ % 6 == 0))
-            adjust(held & Left ? -1 : 1);
-        ++horizontal_;
-    } else
-        horizontal_ = 0;
-    if (down & A)
-        action();
-    if (down & B)
-        back();
-    if (down & X) {
-        if (page_ == 0 && !formOpen_ && !mister_ && selected_ < int(sources_.size()))
-            sourceEditor(selected_ == 0 ? -2 : selected_ - 1);
-        else
-            command("stop");
+    if(fullscreen_&&!optionApply_&&(down&Listen)){listening_=true;blocked_=down|held;dragging_=false;return;}
+    if(down&Plus)command("playpause");
+    if(down&ZL){if(fullscreen_)seek(-5);else command("previous");}
+    if(down&ZR){if(fullscreen_)seek(5);else command("next");}
+    if(down&Y){if(mister_&&(controls_||fullscreen_))command("mute");else command("shuffle");}
+    if(down&Minus){if(fullscreen_)toggleFullscreen();else controls_=!controls_;}
+    if(!optionApply_&&(down&Full))toggleFullscreen();
+    if(!optionApply_){if(down&L){if(fullscreen_)command("previous");else changePage((page_+4)%5);}if(down&R){if(fullscreen_)command("next");else changePage((page_+1)%5);}}
+    int vertical=(held&Up)?-1:(held&Down)?1:0;
+    if(verticalRepeat_.fire(vertical,down&(Up|Down),SDL_GetTicks64()))move(vertical);
+    int horizontal=(held&Left)?-1:(held&Right)?1:0;
+    if(horizontalRepeat_.fire(horizontal,down&(Left|Right),SDL_GetTicks64()))adjust(horizontal);
+    if(down&A)action();if(down&B)back();
+    if(down&X){
+        if(page_==0&&canManageSources()&&!formOpen_&&!mister_&&!fullscreen_&&!controls_&&selected_<int(sources_.size())){
+            const auto device=sources_[selected_];int id=device.value("id",-1);
+            if(id>=0)sourceEditor(id);else if(id!=-2){std::string folder=device.value("folder",settings_.value("music_root",std::string{}));if(keyboard_("Music folder",folder,false)){if(id==-1)patch({{"music_root",folder}});else{auto folders=settings_.value("storage_folders",Json::object());folders[device.value("mount",std::string{})]=folder;patch({{"storage_folders",folders}});}}}
+        }else command("stop");
     }
 }
 void RemoteView::displayChanged() {
@@ -965,12 +957,9 @@ void RemoteView::swipe(int delta) {
 bool RemoteView::beginScrub(int x, int y) {
     if (screenMode_)
         return false;
-    if (!ready() || optionApply_)
+    if (!ready() || optionApply_ || listening_)
         return false;
-    if (!((fullscreen_ &&
-           inside(x, y, playerX() - 10, layout().fullY(510) - 15, playerWidth() + 20, 40)) ||
-          (!fullscreen_ && inside(x, y, 890, layout().bottom(526), 348, 40))))
-        return false;
+    if(!playerSeekRect(fullscreen_,layout().extraHeight(),playerX(),playerWidth()).contains(x,y))return false;
     if (state_.value("playback", Json::object()).value("duration", 0.0) <= 0)
         return false;
     dragging_ = true;
@@ -1010,28 +999,19 @@ void RemoteView::click(int x, int y) {
         changePage(std::clamp((x - 28) / 154, 0, 4));
         return;
     }
-    if (inside(x, y, 28, layout().bottom(635), 740, 48)) {
-        controls_ = true;
-        control_ = (x - 28) / 74;
-        transport(control_);
-        return;
-    }
-    if (inside(x, y, 804, layout().bottom(635), 66, 46)) {
-        fullscreen_ = !fullscreen_;
-        controls_ = fullscreen_;
-        return;
-    }
-    if(mister_ && inside(x,y,888,layout().bottom(635),76,46)){control_=10;controls_=true;transport(10);return;}
-    if (inside(x, y, 980, layout().bottom(635), 250, 48)) {
-        command("volume", {{"value", std::clamp((x - 980) * 100 / 250, 0, 100)}});
-        return;
-    }
-    if ((fullscreen_ &&
-         inside(x, y, playerX() - 10, layout().fullY(510) - 15, playerWidth() + 20, 40)) ||
-        (!fullscreen_ && inside(x, y, 890, layout().bottom(526), 348, 40))) {
-        dragging_ = true;
-        drag(x);
-        return;
+    if(listening_){listening_=false;return;}
+    const int extra=layout().extraHeight();
+    auto volume=playerVolumeRect(fullscreen_,extra,playerX(),playerWidth());
+    if(volume.contains(x,y)){controls_=true;focus().row=fullscreen_?1:3;command("volume",{{"value",std::clamp((x-volume.x-65)*100/std::max(1,volume.w-127),0,100)}});return;}
+    auto seeker=playerSeekRect(fullscreen_,extra,playerX(),playerWidth());
+    if(seeker.contains(x,y)){controls_=true;focus().row=0;dragging_=true;drag(x);return;}
+    for(int row=fullscreen_?2:1;row<=2;row++)for(int col=0;col<PlayerNavigation::count(fullscreen_,row);col++)if(playerButtonRect(fullscreen_,extra,row,col).contains(x,y)){controls_=true;focus()={row,col};action();return;}
+    if(mister_&&inside(x,y,fullscreen_?playerX():900,(fullscreen_?535:650)+extra,100,28)){command("mute");return;}
+    if(fullscreen_)return;
+    if(artworkVisible()&&inside(x,y,layout().compactArtX(),182,layout().compactArtDesignSize(),layout().artSize(false))){toggleFullscreen();return;}
+    if(page_==3&&!formOpen_&&documentKind_.empty()){
+        if(inside(x,y,28,182,220,listRows()*48)){int target=(y-182)/48;if(target<int(categories_.size())){settingsCategory_=-1;selected_=target;controls_=false;action();}return;}
+        if(inside(x,y,264,182,592,listRows()*48)){if(settingsCategory_<0)settingsCategory_=std::clamp(selected_,0,std::max(0,int(categories_.size())-1));int target=scroll_+(y-182)/48;if(target<int(fields_.size())){selected_=target;controls_=false;action();}return;}
     }
     if (!fullscreen_ && inside(x, y, 28, 182, 828, listRows() * 48)) {
         int target = scroll_ + (y - 182) / 48;
@@ -1044,106 +1024,62 @@ void RemoteView::click(int x, int y) {
 }
 void RemoteView::drawRows(std::vector<std::string> names, std::vector<std::string> values,
                           std::string heading) {
-    ui_.text(46, 160, heading, 15, MUTED, 790);
-    for (int i = scroll_; i < std::min(scroll_ + listRows(), int(names.size())); ++i) {
-        int y = 182 + (i - scroll_) * 48;
-        bool active = i == selected_ && !controls_;
-        if (active)
-            ui_.rect(38, y, 808, 44, FOCUS);
-        ui_.text(50, y + 10, names[i], 20, active ? ACCENT : TEXT, values.empty() ? 780 : 440);
-        if (i < int(values.size()))
-            ui_.text(505, y + 12, values[i], 17, MUTED, 325);
+    bool settings=page_==3&&!formOpen_&&documentKind_.empty();int x=settings?264:28,w=settings?592:828;
+    ui_.text(x+18,160,heading,15,MUTED,w-36);
+    for(int i=scroll_;i<std::min(scroll_+listRows(),int(names.size()));i++){
+        int y=182+(i-scroll_)*48;UI::Clip clip(ui_,x+10,y,w-20,44);bool active=i==selected_&&!controls_&&(!settings||settingsCategory_>=0);
+        if(active){ui_.rect(x+10,y,w-20,44,FOCUS);ui_.rect(x+10,y,4,44,ACCENT);}
+        ui_.text(x+22,y+9,names[i],settings?18:20,active?ACCENT:TEXT,values.empty()?w-44:settings?320:440);
+        if(i<int(values.size()))ui_.text(x+(settings?356:477),y+11,values[i],settings?15:17,MUTED,settings?214:325);
     }
 }
-void RemoteView::drawPlayer() {
-    auto p = state_.value("playback", Json::object());
-    bool art = artworkVisible();
-    int x = playerX(), width = playerWidth();
-    if (art)
-        ui_.image(cover_, fullscreen_ ? 64 : layout().compactArtX(), fullscreen_ ? 100 : 178,
-                  fullscreen_ ? 440 : layout().compactArtDesignSize());
-    int y = fullscreen_ ? layout().fullY(155) : (art ? layout().compactTitleY() : 178);
-    ui_.marquee(x, y, p.value("title", std::string("Nothing playing")), fullscreen_ ? 36 : 25, TEXT,
-                width, "remote-title");
-    ui_.text(x, (fullscreen_ ? layout().fullY(228) : y + 39), p.value("artist", std::string{}),
-             fullscreen_ ? 28 : 17, ACCENT, width);
-    if (fullscreen_ || layout().docked)
-        ui_.text(x, (fullscreen_ ? layout().fullY(280) : y + 74), p.value("album", std::string{}),
-                 fullscreen_ ? 24 : 17, MUTED, width);
-    {
-        int size = fullscreen_ ? 18 : 13;
-        int bx = x, by = fullscreen_ ? layout().fullY(340) : (y + 67);
-        // Compact album and badges have dedicated rows on the larger TV layout.
-        if (!fullscreen_ && layout().docked)
-            by = y + 108;
-        for (auto &v : p.value("badges", Json::array())) {
-            auto label = display(v);
-            int w = ui_.textWidth(label, size) + 20;
-            if (bx != x && bx + w > x + width) {
-                bx = x;
-                by += size + 16;
-            }
-            ui_.badge(bx, by, w, size + 14, label, size);
-            bx += w + 8;
-        }
+void RemoteView::drawPlayer(){
+    auto p=state_.value("playback",Json::object());int x=playerX(),width=playerWidth(),extra=layout().extraHeight();
+    if(artworkVisible())ui_.image(cover_,fullscreen_?64:layout().compactArtX(),fullscreen_?140:182,fullscreen_?400:layout().compactArtDesignSize());
+    int y=fullscreen_?180:artworkVisible()?layout().compactTitleY():190;
+    if(fullscreen_)ui_.text(x,142,"NOW PLAYING",15,MUTED,width);
+    ui_.marquee(x,y,p.value("title",std::string("Nothing playing")),fullscreen_?34:22,TEXT,width,"remote-title");
+    ui_.text(x,fullscreen_?238:y+34,p.value("artist",std::string{}),fullscreen_?25:16,fullscreen_?ACCENT:MUTED,width);
+    if(fullscreen_)ui_.text(x,282,p.value("album",std::string{}),22,MUTED,width);
+    if(!(listening_&&settings_.value("listening_hide_metadata",localSettings_.listeningHideMetadata))){
+        int size=fullscreen_?16:12,bx=x,by=fullscreen_?322:y+65;
+        for(const auto &v:p.value("badges",Json::array())){auto label=display(v);int w=ui_.textWidth(label,size)+20;if(bx!=x&&bx+w>x+width){bx=x;by+=size+16;}ui_.badge(bx,by,w,size+14,label,size);bx+=w+8;}
     }
-    if (fullscreen_ && p.value("count", 0) > 0)
-        ui_.text(x, layout().fullY(392),
-                 std::to_string(p.value("index", 0) + 1) + " / " +
-                     std::to_string(p.value("count", 0)),
-                 17, MUTED);
-    if (settings_.value("visualizer", false)) {
-        auto bars = p.value("spectrum", Json::array());
-        for (int i = 0; i < std::min(32, int(bars.size())); ++i) {
-            int h = std::max(
-                2, int(std::clamp(bars[i].get<double>(), 0.0, 1.0) * (fullscreen_ ? 64 : 24)));
-            ui_.rect(x + i * width / 32,
-                     (fullscreen_ ? layout().fullY(491) : layout().bottom(530)) - h,
-                     std::max(3, width / 32 - 7), h, ACCENT);
-        }
+    if(settings_.value("visualizer",false)){
+        auto a=playerVisualizerRect(fullscreen_,extra,x,width);UI::Clip clip(ui_,a.x,a.y,a.w,a.h);auto bars=p.value("spectrum",Json::array());
+        for(int i=0;i<std::min(32,int(bars.size()));i++){int h=std::max(2,int(std::clamp(bars[i].get<double>(),0.,1.)*a.h));ui_.rect(a.x+i*a.w/32,a.y+a.h-h,std::max(3,a.w/32-(fullscreen_?7:4)),h,ACCENT);}
     }
-    int sy = fullscreen_ ? layout().fullY(510) : layout().bottom(544);
-    ui_.rect(x, sy, width, 6, LINE);
-    double duration = p.value("duration", 0.0),
-           position = dragging_ ? scrubPosition_ : p.value("position", 0.0);
-    if (duration > 0)
-        ui_.rect(x, sy, int(width * std::clamp(position / duration, 0.0, 1.0)), 6, ACCENT);
-    ui_.text(x, sy + 25, timeText(position) + " / " + timeText(duration), 18, MUTED, width);
+    if(fullscreen_&&p.value("count",0)>0)ui_.text(64,artworkVisible()?layout().bottom(490):100,std::to_string(p.value("index",0)+1)+" / "+std::to_string(p.value("count",0)),16,MUTED);
+    auto a=playerSeekRect(fullscreen_,extra,x,width);bool focused=!listening_&&(fullscreen_||controls_)&&focus().seek();
+    if(focused){ui_.roundedRect(a.x-5,a.y-5,a.w+10,a.h+10,ACCENT,10);ui_.roundedRect(a.x-3,a.y-3,a.w+6,a.h+6,PANEL,8);}
+    double duration=p.value("duration",0.),position=dragging_?scrubPosition_:p.value("position",0.);ui_.rect(a.x,a.y+12,a.w,5,LINE);
+    if(duration>0){int offset=int(a.w*std::clamp(position/duration,0.,1.));ui_.rect(a.x,a.y+12,offset,5,ACCENT);ui_.rect(a.x+std::clamp(offset,4,a.w-4)-4,a.y+8,8,13,ACCENT);}
+    ui_.text(a.x,a.y+30,timeText(position),fullscreen_?18:14,MUTED);ui_.rightText(a.x+a.w,a.y+30,duration>0?(p.value("duration_estimated",false)?"~":"")+timeText(duration):"--:--",fullscreen_?18:14,MUTED);
 }
-void RemoteView::drawControls() {
-    auto p = state_.value("playback", Json::object());
-    ui_.text(28, layout().bottom(605), client_->connected() ? (!status_.empty()?status_:p.value("error",std::string{}).empty()?p.value("loading_message",std::string{}):p.value("error",std::string{})) : client_->error(), 16,
-             ACCENT, 1220);
-    ui_.rect(0, layout().bottom(630), 1280, 90, FOOTER);
-    for (int i = 0; i < 10; ++i) {
-        bool focus = (controls_ || fullscreen_) && i == control_;
-        ui_.rect(28 + i * 74, layout().bottom(635), 66, 46, focus ? FOCUS : PANEL);
-        if (focus)
-            ui_.rect(28 + i * 74, layout().bottom(679), 66, 2, ACCENT);
-        bool active = (i == 4 && settings_.value("shuffle", false)) ||
-                      (i == 5 && settings_.value("repeat", 0));
-        ui_.transportIcon(61 + i * 74, layout().bottom(658), 24, i,
-                          p.value("playing", false) && !p.value("paused", false),
-                          active ? ACCENT : TEXT, settings_.value("repeat", 0) == 2);
-    }
-    ui_.rect(804, layout().bottom(635), 66, 46, PANEL);
-    for (int side : {-1, 1})
-        for (int vertical : {-1, 1}) {
-            int x = 837 + side * 12, y = layout().bottom(658) + vertical * 12;
-            ui_.line(x, y, x - side * 7, y, 2, TEXT);
-            ui_.line(x, y, x, y - vertical * 7, 2, TEXT);
+void RemoteView::drawControls(){
+    auto p=state_.value("playback",Json::object());int extra=layout().extraHeight();
+    if(!listening_){
+        for(int row=fullscreen_?2:1;row<=2;row++)for(int col=0;col<PlayerNavigation::count(fullscreen_,row);col++){
+            PlayerNavigation item{row,col};int id=item.action(fullscreen_);auto a=playerButtonRect(fullscreen_,extra,row,col);bool focus=(fullscreen_||controls_)&&this->focus().row==row&&this->focus().column==col;
+            bool active=(id==4&&settings_.value("shuffle",false))||(id==5&&settings_.value("repeat",0));
+            if(focus)ui_.roundedRect(a.x-3,a.y-3,a.w+6,a.h+6,ACCENT,14);
+            ui_.roundedRect(a.x,a.y,a.w,a.h,id==1?FOCUS:PANEL);
+            ui_.transportIcon(a.x+a.w/2,a.y+a.h/2,fullscreen_?(id==1?52:44):(id==1?42:34),id==6?10:id==7?11:id,p.value("playing",false)&&!p.value("paused",false),active||id==1?ACCENT:TEXT,settings_.value("repeat",0)==2);
+            if(active)ui_.rect(a.x+a.w/2-10,a.y+a.h-5,20,3,ACCENT);
         }
-    if(mister_)ui_.button(888,layout().bottom(635),76,46,settings_.value("muted",false)?"Unmute":"Mute",(controls_||fullscreen_)&&control_==10);
-    ui_.text(980, layout().bottom(635),
-             "Volume " + std::to_string(settings_.value("volume", 80)) + "%", 15, MUTED);
-    ui_.rect(980, layout().bottom(669), 250, 5, LINE);
-    ui_.rect(980, layout().bottom(669), settings_.value("volume", 80) * 250 / 100, 5, ACCENT);
-    std::string hint = optionApply_ ? "Up/Down Choose   A Confirm   B Cancel"
-                       : controls_ || fullscreen_
-                           ? "Left/Right Controls   Up/Down Seek 5s   A Use   - Browse"
-                           : "A Open/Use   B Back   Left/Right Jump 5   - Controls";
-    ui_.text(28, layout().bottom(692),
-             hint + "   L/R Tabs   R3 Player   ZL/ZR Prev/Next   + Play/Pause", 13, MUTED, 1224);
+        auto a=playerVolumeRect(fullscreen_,extra,playerX(),playerWidth());bool focused=(fullscreen_||controls_)&&focus().volume(fullscreen_);
+        if(focused){ui_.roundedRect(a.x-4,a.y-4,a.w+8,a.h+8,ACCENT,10);ui_.roundedRect(a.x-2,a.y-2,a.w+4,a.h+4,PANEL,8);}
+        int volume=settings_.value("volume",100);ui_.text(a.x,a.y,"Volume",14,focused?ACCENT:MUTED);ui_.rect(a.x+65,a.y+10,a.w-127,4,LINE);ui_.rect(a.x+65,a.y+10,(a.w-127)*volume/100,4,ACCENT);ui_.text(a.x+a.w-54,a.y,std::to_string(volume)+"%",14,MUTED);
+        if(mister_)ui_.button(fullscreen_?playerX():900,(fullscreen_?535:650)+extra,100,28,settings_.value("muted",false)?"Unmute":"Mute");
+    }
+    auto message=client_->connected()?(!status_.empty()?status_:p.value("error",std::string{})):client_->error();
+    if(!message.empty())ui_.text(fullscreen_?28:600,fullscreen_?90:64,message,13,ACCENT,fullscreen_?1200:620);
+    if(listening_&&settings_.value("listening_hide_footer",localSettings_.listeningHideFooter))return;
+    ui_.rect(0,layout().footerY(),1280,layout().footerHeight(),FOOTER);int x=28,y=layout().footerY()+8;auto hint=[&](const char *key,const std::string &text){x=ui_.padHint(x,y,key,text);};
+    if(optionApply_){hint("Dpad","Choose");hint("A","Confirm");hint("B","Cancel");return;}
+    if(!listening_){hint("Dpad",(fullscreen_||controls_)?focus().seek()?"Seek 5s":focus().volume(fullscreen_)?"Volume":"Navigate":"Navigate");hint("A",(fullscreen_||controls_)?"Use":"Open");hint("B",fullscreen_?"Close":"Back");}
+    if(!fullscreen_){hint("-","Player");hint("L","");hint("R","Tabs");hint("R3","Fullscreen");}else{hint("L","");hint("R","Track");hint("ZL","");hint("ZR","Seek 5s");hint("L3",listening_?"Exit":"Listening");}
+    hint("+","Play/Pause");if(mister_&&!listening_&&(fullscreen_||controls_))hint("Y","Mute");
 }
 void RemoteView::draw() {
     if (screenMode_) {
@@ -1153,17 +1089,19 @@ void RemoteView::draw() {
     setAppearance(settings_.value("theme", std::string("dark")),
                   settings_.value("accent_colour", std::string("#EF4444")));
     ui_.begin();
+    if(!(listening_&&settings_.value("listening_hide_title",localSettings_.listeningHideTitle))){
     ui_.text(28, 19, "NX Hi-Fi", 38, ACCENT);
     ui_.text(28 + ui_.textWidth("NX Hi-Fi", 38) + 14, 35, std::string("v") + Version, 16, MUTED);
-    ui_.text(375, 30, "Independent · " + client_->config.name, 22, ACCENT, 580);
-    if (settings_.value("show_clock", false))
+    ui_.text(375,30,hostName(hostType_)+(hostVersion_.empty()?"":" v"+hostVersion_),18,ACCENT,580);
+    }
+    if (settings_.value("show_clock", false)&&!(listening_&&settings_.value("listening_hide_clock",localSettings_.listeningHideClock)))
         ui_.text(1110, 29, state_.value("clock", std::string{}), 22, TEXT, 142);
     if (!fullscreen_) {
         const char *tabs[] = {"Sources", "Library", "Equalizer", "Settings", "Remote"};
         for (int i = 0; i < 5; ++i)
             ui_.button(28 + i * 154, 90, 142, 48, tabs[i], page_ == i);
-        ui_.rect(28, 155, 828, (445 + layout().extraHeight()), PANEL);
-        ui_.rect(876, 155, 376, (445 + layout().extraHeight()), PANEL);
+        ui_.rect(28, 155, 828, layout().panelHeight(), PANEL);
+        ui_.rect(876, 155, 376, layout().panelHeight(), PANEL);
         std::vector<std::string> names, values;
         std::string heading;
         if (formOpen_) {
@@ -1192,13 +1130,13 @@ void RemoteView::draw() {
             heading = "SOURCES";
             for (auto &s : sources_)
                 names.push_back(s.value("name", std::string("Source")));
-            if (mister_) {
+            if (mister_&&canManageSources()) {
                 names.push_back("Manage SMB shares");
                 names.push_back("Manage radio stations");
                 names.push_back("Configure Plex");
                 names.push_back("Configure Jellyfin");
                 names.push_back("Configure Emby");
-            } else
+            } else if(canManageSources())
                 names.push_back("+ Add SMB share");
         } else if (page_ == 1) {
             heading = loading_ ? "LOADING..." : path_.empty() ? "LIBRARY" : path_;
@@ -1219,9 +1157,7 @@ void RemoteView::draw() {
             for (auto &v : bands)
                 values.push_back(display(v) + " dB");
         } else if (page_ == 3) {
-            const char *categories[]={"Playback","Appearance","Controls","System","Experimental"};
-            heading = mister_ && settingsCategory_>=0 ? std::string("MISTER SETTINGS / ")+categories[settingsCategory_] : "TARGET SETTINGS";
-            if(mister_ && settingsCategory_<0){for(auto category:categories)names.push_back(category);}
+            heading="TARGET SETTINGS";
             for (auto &f : fields_) {
                 auto k = f.at("key").get<std::string>();
                 names.push_back(f.value("label", k));
@@ -1237,7 +1173,12 @@ void RemoteView::draw() {
             for (auto &c : clients_)
                 names.push_back("Connect · " + c.name);
         }
-        drawRows(names, values, heading);
+        if(page_==3&&!formOpen_&&documentKind_.empty()){
+            ui_.rect(248,155,16,layout().panelHeight(),BG);ui_.rect(28,155,220,layout().panelHeight(),PANEL);ui_.rect(264,155,592,layout().panelHeight(),PANEL);ui_.text(46,160,"CATEGORIES",15,MUTED,184);
+            int current=settingsCategory_>=0?settingsCategory_:selected_;
+            for(int i=0;i<int(categories_.size());i++){int y=182+i*48;UI::Clip clip(ui_,40,y,196,44);if(i==current)ui_.rect(40,y,196,44,FOCUS);if(i==current&&settingsCategory_<0&&!controls_)ui_.rect(40,y,4,44,ACCENT);ui_.text(52,y+9,categories_[i],20,i==current?ACCENT:TEXT,172);}
+            drawRows(names,values,current<int(categories_.size())?categories_[current]:heading);
+        }else drawRows(names, values, heading);
     }
     drawPlayer();
     drawControls();

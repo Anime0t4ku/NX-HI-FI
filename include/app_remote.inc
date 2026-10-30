@@ -38,7 +38,7 @@ void activateRemote(bool screen) {
     targetView = std::make_unique<RemoteView>(
         ui, renderer, pendingClient,
         [](const auto &label, auto &value, bool secret) { return keyboard(label, value, secret); },
-        settings.remoteClients, screen);
+        settings.remoteClients, screen,settings);
     cooldown = 15;
 }
 void connectionAction() {
@@ -137,7 +137,7 @@ void drawConnection() {
         ui.text(98, 375, "Browse and control music separately from the target's screen.", 19, MUTED,
                 1050);
         ui.button(80, 420, 1120, 58,
-                  canScreen ? "Screen control" : "Screen control · requires NX Hi-Fi v0.9.0",
+                  canScreen ? "Screen control" : "Screen control · unavailable",
                   connectionSelection == 1);
         ui.text(98, 485, "View and operate the target's interface.", 19, MUTED, 1050);
         ui.button(80, 535, 1120, 54, "Cancel", connectionSelection == 2);
@@ -166,7 +166,7 @@ void drawScan() {
             if (s.host == c.host)
                 saved = true;
         ui.button(46, 198 + row * 44, 1180, 40,
-                  c.name + " · " + c.host + (c.type == "nx" ? " · NX" : " · MiSTer") +
+                  c.name + " · " + c.host + (c.type == "nx" ? " · NX" : c.type=="prospero"?" · Prospero":" · MiSTer") +
                       (saved ? " · Saved" : ""),
                   scanSelection == index);
     }
@@ -284,9 +284,9 @@ u64 screenButtons(unsigned b) {
                         HidNpadButton_Y,    HidNpadButton_Minus, HidNpadButton_Plus,
                         HidNpadButton_L,    HidNpadButton_R,     HidNpadButton_ZL,
                         HidNpadButton_ZR,   HidNpadButton_Up,    HidNpadButton_Down,
-                        HidNpadButton_Left, HidNpadButton_Right, HidNpadButton_StickR};
+                        HidNpadButton_Left, HidNpadButton_Right, HidNpadButton_StickR,HidNpadButton_StickL};
     u64 out = 0;
-    for (int i = 0; i < 15; ++i)
+    for (int i = 0; i < 16; ++i)
         if (b & (1u << i))
             out |= keys[i];
     return out;
@@ -304,12 +304,13 @@ void dispatchScreenInput(const nlohmann::json &j) {
     if (wasSleeping)
         return;
     if (kind == "buttons") {
-        unsigned b = j.value("buttons", 0u) & 32767;
+        unsigned b = j.value("buttons", 0u) & 65535;
         PadState dummy{};
         cooldown = 0;
         input(dummy, screenButtons(b), screenButtons(b), true);
         return;
     }
+    if(listening){if(kind=="up")setListening(false);return;}
     int w = j.value("w", 0), h = j.value("h", 0);
     if (w != layout().width() || h != layout().height())
         return;

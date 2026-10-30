@@ -23,3 +23,12 @@ build-host/nx-hifi-gui-test: $(BUILD)/app_gui_test.o $(OBJECTS) $(BUILD)/decoder
 test-player: build-host/nx-hifi-gui-test
 	./build-host/nx-hifi-gui-test
 -include $(OBJECTS:.o=.d) $(BUILD)/app_gui_test.d
+
+$(BUILD)/remote_view_test.o: tests/remote_view_test.cpp $(wildcard include/*.hpp)
+	@mkdir -p $(BUILD)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+build-host/remote-view-test: $(BUILD)/remote_view_test.o $(OBJECTS) $(BUILD)/decoder.o $(BUILD)/cover_codec.o
+	$(CXX) -pthread $^ $(HOST_SMB_LIB) $(HOST_EXTRA_LIBS) -lm -lz -ldl -o $@
+.PHONY: test-remote-view
+test-remote-view: build-host/remote-view-test
+	./build-host/remote-view-test

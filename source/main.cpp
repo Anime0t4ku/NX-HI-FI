@@ -104,7 +104,7 @@ class App {
             keyboard("Client name", editClient.name);
             cooldown = 15;
         } else if (selected == 1) {
-            choose("Client type", {"nx", "mister"}, {"NX Hi-Fi", "MiSTer Hi-Fi"}, editClient.type,
+            choose("Client type", {"nx", "prospero", "mister"}, {"NX Hi-Fi", "Prospero Hi-Fi", "MiSTer Hi-Fi"}, editClient.type,
                    [this](auto v) {
                        editClient.type = v.template get<std::string>();
                        editClient.port = 8182;
@@ -312,6 +312,7 @@ class App {
                 std::clamp((x - seekRect().x) / double(seekRect().w), 0., 1.) * p.duration;
     }
     bool beginScrub(int x, int y) {
+        if(listening)return false;
         auto p = player.snapshot();
         if (!scrubHit(x, y) || p.duration <= 0 || (!p.playing && !p.busy))
             return false;
@@ -334,9 +335,16 @@ class App {
         mouseScrub = false;
     }
     bool fullscreen = false;
+    bool listening=false;
+    u64 listeningBlocked=0;
+    void setListening(bool enabled){
+        if(enabled){colourPicking=false;optionApply={};if(!fullscreen)toggleFullscreen();}
+        listening=enabled;scrubbing=mouseScrub=false;wake();
+        verticalRepeat={};horizontalRepeat={};
+    }
     void toggleFullscreen() {
         if(colourPicking)return;
-        fullscreen=!fullscreen;scrubbing=mouseScrub=false;
+        fullscreen=!fullscreen;listening=false;scrubbing=mouseScrub=false;
         controlsFocused=fullscreen;
         if(fullscreen)fullFocus={2,1};
         syncPlayerFocus();
@@ -380,9 +388,11 @@ class App {
         return "--:--";
     }
     void header() {
+        if(!(listening&&settings.listeningHideTitle)){
         ui.text(28, 19, "NX Hi-Fi", 38, ACCENT);
         ui.text(28 + ui.textWidth("NX Hi-Fi", 38) + 14, 35, std::string("v") + Version, 16, MUTED);
-        if (settings.showClock) {
+        }
+        if (settings.showClock&&!(listening&&settings.listeningHideClock)) {
             auto label = clock();
             ui.text(1252 - ui.textWidth(label, 22), 29, label, 22, TEXT);
         }
@@ -486,6 +496,9 @@ class App {
                 settings = before;
                 return fail(status);
             }
+        } else if(op=="listening_mode"){
+            if(!j.contains("enabled")||!j["enabled"].is_boolean())return fail("enabled must be boolean");
+            setListening(j["enabled"].get<bool>());
         } else if (op == "settings") {
             if (!j.contains("revision") || !j["revision"].is_number_integer() ||
                 j["revision"].get<uint64_t>() != revision)
@@ -605,7 +618,9 @@ class App {
         auto accents = J::array();
         for (auto &preset : accentPresets)
             accents.push_back({{"name", preset.name}, {"hex", preset.hex}});
-        return {{"version", Version},
+        return {{"identity",remoteIdentity()},{"app_id","nx-hifi"},{"protocol_version",1},{"listening_mode",listening},
+                {"local_sources",J::array({{{"id",-1},{"name","SD card"},{"folder",settings.musicRoot}},{{"id",-2},{"name","Physical Disc"}}})},
+                {"version", Version},
                 {"physical_disc", true},
                 {"revision", revision},
                 {"sources_revision", sourcesRevision},
@@ -1189,6 +1204,7 @@ class App {
         }
     }
     void click(int x, int y) {
+        if(listening){setListening(false);return;}
         if (connectionOpen || scanOpen) {
             dialogClick(x, y);
             return;
@@ -1327,7 +1343,7 @@ class App {
         ui.marquee(x,180,trackTitle(p),34,TEXT,width,"fullscreen-title");
         ui.text(x,238,p.details.artist,25,ACCENT,width);
         ui.text(x,282,trackAlbum(p),22,MUTED,width);
-        drawBadges(p,x,330,width,16);
+        if(!(listening&&settings.listeningHideMetadata))drawBadges(p,x,322,width,16);
         drawVisualizer(p);
         if(p.count>0)ui.text(64,artworkVisible()?layout().bottom(490):100,std::to_string(p.index+1)+" / "+std::to_string(p.count),16,MUTED);
     }
@@ -1342,7 +1358,7 @@ class App {
         }
     }
     void drawSeek(const Playback &p){
-        auto a=seekRect();bool focus=(controlsFocused||fullscreen)&&playerFocus().seek();
+        auto a=seekRect();bool focus=!listening&&(controlsFocused||fullscreen)&&playerFocus().seek();
         if(focus){ui.roundedRect(a.x-5,a.y-5,a.w+10,a.h+10,ACCENT,10);ui.roundedRect(a.x-3,a.y-3,a.w+6,a.h+6,PANEL,8);}
         double position=scrubbing?scrubPosition:p.position;
         int y=a.y+12;ui.rect(a.x,y,a.w,5,LINE);
@@ -1400,12 +1416,14 @@ class App {
         ui.button(432, 531, 380, 44, "Cancel", colourSelection == 15);
     }
     void drawControls(const Playback &p,const std::string &message){
-        if(!colourPicking){drawSeek(p);drawPlayerButtons(p);}
+        if(!colourPicking){drawSeek(p);if(!listening)drawPlayerButtons(p);}
         // Status/errors stay visible outside the compact controls-only footer.
         if(!message.empty())ui.text(fullscreen?30:600,fullscreen?90:64,message,13,ACCENT,fullscreen?1210:620);
+        if(listening&&settings.listeningHideFooter)return;
         ui.rect(0,layout().footerY(),1280,layout().footerHeight(),FOOTER);
         int x=28,y=layout().footerY()+8;
         auto hint=[&](const char *button,const std::string &action){x=ui.padHint(x,y,button,action);};
+        if(listening){hint("+","Play/Pause");hint("L","");hint("R","Track");hint("ZL","");hint("ZR","Seek 5s");hint("L3","Exit");return;}
         if(optionApply){hint("Dpad","Navigate");hint("A","Select");hint("B","Back");return;}
         if(colourPicking){hint("Dpad","Colour");hint("A","Choose");hint("B","Cancel");return;}
         if(fullscreen||controlsFocused){
@@ -1417,7 +1435,7 @@ class App {
         }else{hint("Dpad","Navigate");hint("A",page==3?(settingsNavigation.entries?"Change":"Select"):editing?"Edit":"Open");hint("B",page==3&&settingsNavigation.entries?"Categories":"Back");if(page==0)hint("X","Edit source");if(page==4)hint("X","Edit client");}
         if(!fullscreen){hint("-","Player");hint("L","");hint("R","Tabs");hint("R3","Fullscreen");}
         hint("+","Play/Pause");
-        if(fullscreen){hint("L","");hint("R","Track");hint("ZL","");hint("ZR","Track");}
+        if(fullscreen){hint("L","");hint("R","Track");hint("ZL","");hint("ZR","Seek 5s");hint("L3","Listening");}
     }
 
   public:
@@ -1485,8 +1503,8 @@ class App {
                                      HidNpadButton_Down | HidNpadButton_StickLDown,
                                      HidNpadButton_Left,
                                      HidNpadButton_Right,
-                                     HidNpadButton_StickR};
-                for (int i = 0; i < 15; ++i)
+                                     HidNpadButton_StickR,HidNpadButton_StickL};
+                for (int i = 0; i < 16; ++i)
                     if (buttons & masks[i])
                         out |= 1u << i;
                 return out;
@@ -1558,6 +1576,23 @@ class App {
             if (wasSleeping)
                 return;
         }
+        // Consume the exit press and every held input until its release.
+        listeningBlocked &= held;
+        down &= ~listeningBlocked;held &= ~listeningBlocked;
+        if(listening){
+            constexpr u64 playback=HidNpadButton_Plus|HidNpadButton_L|HidNpadButton_R|HidNpadButton_ZL|HidNpadButton_ZR;
+            if(down&~playback){listeningBlocked=held|down;setListening(false);return;}
+            if(down&HidNpadButton_Plus)player.pause();
+            if(down&HidNpadButton_L)player.previous();
+            if(down&HidNpadButton_R)player.next();
+            if(down&HidNpadButton_ZL)player.seek(-5);
+            if(down&HidNpadButton_ZR)player.seek(5);
+            SDL_Event event;while(SDL_PollEvent(&event))if(event.type==SDL_QUIT)running=false;
+            return;
+        }
+        if(fullscreen&&!colourPicking&&!optionApply&&(down&HidNpadButton_StickL)){
+            setListening(true);listeningBlocked=held|down;return;
+        }
         if (down & HidNpadButton_Plus)
             player.pause();
         if (cooldown > 0) {
@@ -1587,8 +1622,10 @@ class App {
         bool left = held & HidNpadButton_Left, right = held & HidNpadButton_Right;
         int horizontal=left?-1:right?1:0;
         if(horizontalRepeat.fire(horizontal,down&(HidNpadButton_Left|HidNpadButton_Right),SDL_GetTicks64()))adjust(horizontal);
-        if (down & (HidNpadButton_ZL | (fullscreen ? HidNpadButton_L : 0))) player.previous();
-        if (down & (HidNpadButton_ZR | (fullscreen ? HidNpadButton_R : 0))) player.next();
+        if (down & (fullscreen ? HidNpadButton_L : HidNpadButton_ZL)) player.previous();
+        if (down & (fullscreen ? HidNpadButton_R : HidNpadButton_ZR)) player.next();
+        if(fullscreen&&(down&HidNpadButton_ZL))player.seek(-5);
+        if(fullscreen&&(down&HidNpadButton_ZR))player.seek(5);
         if (!colourPicking && !optionApply && (down & HidNpadButton_Minus)) {
             if(fullscreen)toggleFullscreen();
             else {controlsFocused=!controlsFocused;syncPlayerFocus();}
@@ -1735,7 +1772,7 @@ class App {
         ui.recordScreen(settings.remoteEnabled && screenSessions.active(SDL_GetTicks64()) &&
                         SDL_GetTicks64() - lastScreenPublish >= 50);
         updateRemote();
-        sleeping = settings.screensaverSeconds > 0 &&
+        sleeping = !listening && settings.screensaverSeconds > 0 &&
                    SDL_GetTicks64() - lastInteraction >= Uint64(settings.screensaverSeconds) * 1000;
         player.tick();
         LoadResult result;
@@ -1868,7 +1905,7 @@ class App {
             heading = clientEditing ? "EDIT REMOTE CLIENT" : "REMOTE CLIENTS";
             if (clientEditing) {
                 names = {"Name", "Client type", "Host / IP", "Save", "Cancel"};
-                values = {editClient.name, editClient.type == "nx" ? "NX Hi-Fi" : "MiSTer Hi-Fi",
+                values = {editClient.name, editClient.type == "nx" ? "NX Hi-Fi" : editClient.type=="prospero"?"Prospero Hi-Fi":"MiSTer Hi-Fi",
                           editClient.host, "", ""};
                 if (editClientIndex >= 0)
                     names.push_back("Remove client");
@@ -2001,7 +2038,7 @@ int main(int, char **) {
     Settings settings;
     settings.musicRoot = "sdmc:/music";
     std::string error;
-    playbackTrace("boot.gui-1.2.0", 0, true);
+    playbackTrace("boot.gui-1.3.0", 0, true);
     loadSettings(ConfigPath, settings, error);
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_EVENTS) < 0) {
         consoleInit(nullptr);

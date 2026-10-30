@@ -1,4 +1,5 @@
 #include "discovery.hpp"
+#include "host_identity.hpp"
 #include "socket_write.hpp"
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -123,9 +124,9 @@ ProbeResult probeRemote(RemoteClientConfig c, const std::atomic<bool> &cancel, i
         ProbeResult out;
         out.client = c;
         auto info = remoteHttp(c, "GET", "/api/info", {}, cancel, ms);
-        if (info.is_object() && info.value("app", std::string{}) == "NX Hi-Fi") {
+        if (info.is_object() && (info.value("app", std::string{}) == "NX Hi-Fi"||info.value("app_id",std::string{})=="prospero-hifi"||info.value("app_id",std::string{})=="nx-hifi")) {
             out.online = true;
-            out.client.type = "nx";
+            out.client.type = hostType(info);
             out.screen = info.value("screen_control", false);
             if (out.client.name.empty())
                 out.client.name = info.value("name", std::string("NX Hi-Fi"));
@@ -137,7 +138,7 @@ ProbeResult probeRemote(RemoteClientConfig c, const std::atomic<bool> &cancel, i
         if (state.is_object() && state.contains("playback") && state["playback"].is_object() &&
             state.contains("sources_revision") && state.contains("settings")) {
             out.online = true;
-            out.client.type = "nx";
+            out.client.type = hostType(state);
         } else if (state.is_object() && state.contains("state") && state["state"].is_string() &&
                    (state.contains("title") || state.contains("track")) &&
                    (state.contains("volume") || state.contains("format"))) {
@@ -145,7 +146,7 @@ ProbeResult probeRemote(RemoteClientConfig c, const std::atomic<bool> &cancel, i
             out.client.type = "mister";
         }
         if (out.online && out.client.name.empty())
-            out.client.name = out.client.type == "nx" ? "NX Hi-Fi" : "MiSTer Hi-Fi";
+            out.client.name = hostName(out.client.type);
         if (!out.online)
             out.error = "Remote client is offline or is not a compatible Hi-Fi client.";
         return out;

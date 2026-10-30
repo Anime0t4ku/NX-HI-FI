@@ -422,9 +422,9 @@ class UI {
     }
     int padHint(int x,int y,const std::string &button,const std::string &label){
         int id=button=="Dpad"?24:button=="+"?25:button=="-"?26:
-               (button=="A"||button=="B"||button=="X"||button=="Y"||button=="R3")?27:28;
+               (button=="A"||button=="B"||button=="X"||button=="Y"||button=="R3"||button=="L3")?27:28;
         transportIcon(x+12,y+12,24,id,false,TEXT,false);
-        if(id==27||id==28)centeredText(x,y+2,24,20,button=="R3"?"R":button,id==28?8:12,TEXT);
+        if(id==27||id==28)centeredText(x,y+2,24,20,button=="R3"?"R":button=="L3"?"L":button,id==28?8:12,TEXT);
         text(x+25,y+2,label,13,MUTED);
         return x+25+textWidth(label,13)+18;
     }

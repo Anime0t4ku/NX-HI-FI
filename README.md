@@ -27,19 +27,20 @@ The layout adjusts automatically between handheld and docked use. NX Hi-Fi must 
 
 | Control | Action |
 | --- | --- |
-| L / R | Switch sections; previous/next track in local fullscreen |
+| L / R | Switch sections; previous/next track in fullscreen |
 | D-pad / left stick | Move through lists |
 | A / B | Select / Back |
 | Left / Right | Jump through lists, adjust EQ, or adjust the highlighted player control |
 | Plus | Play / Pause |
-| ZL / ZR | Previous / Next song |
+| ZL / ZR | Seek −5 / +5 seconds in fullscreen; previous / next song while browsing |
 | Y | Toggle shuffle |
 | Minus | Switch between browsing and player controls |
 | R3 | Open or close fullscreen |
+| L3 | Enter Listening Mode in fullscreen |
 | X | Edit the selected source or remote client; otherwise stop playback |
 | Touch | Select items and use player controls |
 
-In the local mini player and fullscreen player, **Up/Down** moves between control rows. **Left/Right** selects buttons, seeks in ten-second steps when the seek bar is highlighted, or adjusts volume in five-percent steps when volume is highlighted. Fullscreen opens with Play/Pause selected; **B** closes it. The footer uses Switch button symbols.
+In the local mini player and fullscreen player, **Up/Down** moves between control rows. **Left/Right** selects buttons, seeks in ten-second steps when the seek bar is highlighted, or adjusts volume in five-percent steps when volume is highlighted. Independent remote players use the same layout and focus controls, with five-second seek steps. On MiSTer hosts, **Y** toggles mute while player controls are focused. Fullscreen opens with Play/Pause selected; **B** closes it. The footer uses Switch button symbols.
 
 Enable **Settings > Playback > Auto Fullscreen** to open fullscreen when selecting a track. This is off by default. New configurations start at **100% volume**; existing saved volumes are retained.
 
@@ -73,11 +74,13 @@ Enable **Web Remote** in Settings and open the displayed address on a phone or c
 http://SWITCH-IP:8182
 ```
 
+The Web Remote adapts to desktop and mobile, with compact source rows, folder filtering, breadcrumbs, grouped settings and a pinned mobile mini player. It includes a Listening Mode toggle and a separate Screen Control view.
+
 The Web Remote controls playback on the Switch. It also provides music browsing, artwork, equalizer controls, settings and network-share management. NX Hi-Fi must stay open for the Web Remote to work.
 
 ## Control another device
 
-Open **Remote** and add an NX Hi-Fi or MiSTer Hi-Fi client using its IP address. You can also choose **Scan for remote clients**. The target must be running with its Web Remote enabled on port **8182**.
+Open **Remote** and add an NX Hi-Fi, Prospero Hi-Fi or MiSTer Hi-Fi client using its IP address. You can also choose **Scan for remote clients**. The target must be running with its Web Remote enabled on port **8182**.
 
 ### Another NX Hi-Fi device
 
@@ -92,7 +95,7 @@ In Screen control, hold **Minus for three seconds** to open the local menu. Use 
 
 MiSTer uses Independent control. You can browse its available sources, control playback and edit its settings, including Plex, Jellyfin, Emby, SMB and online radio setup.
 
-Remote Settings is organised into Playback, Appearance, Controls, System and Experimental. Select a category with **A** and return with **B**.
+Remote Settings uses categories supplied by the host. Select a category with **A** and return with **B**. Prospero exposes its detected internal, M.2, USB and physical-disc sources. Supported hosts also expose a **Host Listening Mode** toggle. Older hosts retain compatible fallback detection.
 
 GBA Music is available when enabled on the MiSTer. It is experimental, and songs take time to prepare before playback. Preparation messages and errors appear in the remote interface.
 
@@ -133,3 +136,7 @@ Physical USB-drive compatibility and playback must be tested on a real Switch.
 NX Hi-Fi is developed by **Anime0t4ku** and released under [GPLv3](LICENSE). Third-party components retain their own licenses and notices.
 
 Music and artwork are not included.
+
+## Listening Mode
+
+Press **L3** in fullscreen to hide playback and volume controls. Choose the optional hidden elements in **Settings > Listening Mode**. Plus plays/pauses, L/R changes tracks and ZL/ZR seeks five seconds. Other buttons exit without performing their normal action.

@@ -99,6 +99,14 @@ int main(){
             press(HidNpadButton_R);assert(player.snapshot().index==1);
             press(HidNpadButton_ZL|HidNpadButton_L);assert(player.snapshot().index==0);
             press(HidNpadButton_ZR|HidNpadButton_R);assert(player.snapshot().index==1);
+            press(HidNpadButton_ZL);assert(player.snapshot().index==1);
+            press(HidNpadButton_ZR);assert(player.snapshot().index==1);
+            press(HidNpadButton_StickL);draw();assert(!hasText(ui,"NX Hi-Fi")&&!hasText(ui,"Volume"));
+            press(HidNpadButton_Plus);draw();assert(!hasText(ui,"NX Hi-Fi"));
+            press(HidNpadButton_L);assert(player.snapshot().index==0);
+            press(HidNpadButton_R);assert(player.snapshot().index==1);
+            press(HidNpadButton_A);draw();assert(hasText(ui,"NX Hi-Fi")&&hasText(ui,"Volume"));
+            assert(!hasText(ui,"Equalizer preset"));
             draw();assert(!hasText(ui,"Sources"));
             press(HidNpadButton_Up);draw();assert(hasText(ui,"Volume"));press(HidNpadButton_Up);draw();assert(hasText(ui,"Seek 10s"));
             press(HidNpadButton_Down);press(HidNpadButton_Down);for(int i=0;i<3;i++)press(HidNpadButton_Right);
@@ -116,7 +124,7 @@ int main(){
             for(int i=0;i<2;i++)press(HidNpadButton_R); // Library -> Equalizer -> Settings.
             press(HidNpadButton_Minus);
             auto touch=[&](float x,float y){SDL_Event e{};e.type=SDL_FINGERDOWN;e.tfinger.fingerId=1;e.tfinger.x=x/1280;e.tfinger.y=y/layout.height();SDL_PushEvent(&e);e.type=SDL_FINGERUP;SDL_PushEvent(&e);app.input(pad);};
-            touch(100,182+3*48+20);draw();assert(hasText(ui,"Auto Fullscreen")&&hasText(ui,"Categories"));
+            touch(100,182+4*48+20);draw();assert(hasText(ui,"Auto Fullscreen")&&hasText(ui,"Categories"));
             touch(400,202);draw();
             {std::ifstream file(root+"/config.json");auto config=nlohmann::json::parse(file);assert(config["auto_fullscreen"]==!automatic);assert(config["remote_clients"].size()==1);}
             press(HidNpadButton_B);draw();assert(hasText(ui,"Select"));

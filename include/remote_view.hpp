@@ -2,10 +2,14 @@
 #include "client.hpp"
 #include "ui.hpp"
 #include "screen_control.hpp"
+#include "player_navigation.hpp"
+#include "input_timing.hpp"
+#include "host_identity.hpp"
 #include <functional>
 #include <map>
 namespace nxh {
 class RemoteView {
+    friend struct RemoteViewTest;
   public:
     enum Button : unsigned {
         A = 1,
@@ -22,12 +26,12 @@ class RemoteView {
         Down = 2048,
         Left = 4096,
         Right = 8192,
-        Full = 16384
+        Full = 16384, Listen=32768
     };
     using Json = nlohmann::json;
     using Keyboard = std::function<bool(const std::string &, std::string &, bool)>;
     RemoteView(UI &, SDL_Renderer *, RemoteClientConfig, Keyboard, std::vector<RemoteClientConfig>,
-               bool screen = false);
+               bool screen = false, Settings localSettings = {});
     ~RemoteView();
     ClientSession *detach();
     bool disconnect = false, changeMode = false;
@@ -80,6 +84,18 @@ class RemoteView {
     void drawScreen();
     void screenMenuAction();
     bool protocolReady_ = false;
+    std::string hostType_,hostVersion_;
+    bool listening_=false;
+    Settings localSettings_;
+    unsigned blocked_=0;
+    PlayerNavigation menuFocus_,fullFocus_{2,1};
+    PlayerNavigation &focus(){return fullscreen_?fullFocus_:menuFocus_;}
+    ButtonRepeat verticalRepeat_,horizontalRepeat_;
+    std::vector<std::string> categories_;
+    void groupFields();
+    void toggleFullscreen();
+    int playerAction()const;
+
     bool mister_, fullscreen_ = false, controls_ = false, loading_ = false, dragging_ = false;
     int page_ = 0, selected_ = 0, scroll_ = 0, control_ = 1, repeat_ = 0, horizontal_ = 0;
     int settingsCategory_ = -1;
@@ -101,6 +117,7 @@ class RemoteView {
         std::string child;
     };
     std::map<std::string, Position> positions_;
+    std::map<int,Position> settingsPositions_;
     std::map<uint64_t, std::function<void(const ClientSession::Result &)>> callbacks_;
     std::vector<Json> options_;
     std::vector<std::string> labels_;
@@ -129,6 +146,7 @@ class RemoteView {
     void adjust(int);
     void action();
     void back();
+    bool canManageSources()const{return mister_||hostCapability(state_,"source_management",true);}
     int maximum() const;
     void transport(int);
     void seek(double);
@@ -153,7 +171,7 @@ class RemoteView {
     void drawPlayer();
     void drawControls();
     // Independent clients retain their existing transport footer and its list bounds.
-    int listRows() const { return 8 + layout().extraHeight() / 48; }
+    int listRows() const { return layout().rows(); }
     std::string key() const {
         return source_ + "\n" + path_;
     }

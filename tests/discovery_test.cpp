@@ -1,4 +1,5 @@
 #include "discovery.hpp"
+#include "host_identity.hpp"
 #include "remote.hpp"
 #include "screen_control.hpp"
 #include <cassert>
@@ -11,6 +12,15 @@ bool listDirectory(const Source &, const std::string &, std::vector<Entry> &, st
 } // namespace nxh
 using namespace nxh;
 int main() {
+    assert(hostType({{"app_id","prospero-hifi"}})=="prospero");
+    assert(hostType({{"app","NX Hi-Fi"},{"name","Prospero Hi-Fi"}})=="prospero");
+    assert(hostType({{"identity",{{"app_id","nx-hifi"}}}})=="nx");
+    assert(hostType({{"name","MiSTer Hi-Fi"}})=="mister");
+    assert(!hostCapability(nlohmann::json::object(),"listening_mode"));
+    assert(hostType({{"identity",nullptr},{"app_id","prospero-hifi"}})=="prospero");
+    assert(!hostCapability({{"identity",{{"capabilities",nullptr}}}},"listening_mode"));
+    assert(hostCapability({{"identity",remoteIdentity()}},"listening_mode"));
+    std::string validation;assert(validateRemoteClient({"PS5","192.168.1.5","prospero",8182},validation));
     auto hosts = subnetHosts("192.168.23.183", "255.255.255.0");
     assert(hosts.size() == 253);
     assert(std::find(hosts.begin(), hosts.end(), "192.168.23.183") == hosts.end());
