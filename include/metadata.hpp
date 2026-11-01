@@ -2,7 +2,8 @@
 #include "artwork.hpp"
 namespace nxh {
 struct TrackDetails {
-    std::string title, artist, album, format;
+    std::string title, artist, album, format, albumArtist, year, genre;
+    int discNumber=0,trackNumber=0;
     uint32_t sampleRate = 0, bitDepth = 0, channels = 0, bitRate = 0;
     double duration = 0;
     bool durationEstimated = false;
@@ -110,6 +111,11 @@ inline void metaField(TrackDetails &m, std::string key, std::string value) {
         m.artist = value;
     else if (key == "album" || key == "talb" || key == "tal" || key == "iprd")
         m.album = value;
+    else if(key=="albumartist"||key=="album_artist"||key=="tpe2")m.albumArtist=value;
+    else if(key=="discnumber"||key=="disc"||key=="tpos")m.discNumber=std::max(0,std::atoi(value.c_str()));
+    else if(key=="tracknumber"||key=="track"||key=="trck")m.trackNumber=std::max(0,std::atoi(value.c_str()));
+    else if(key=="date"||key=="year"||key=="tdrc"||key=="tyer")m.year=value.substr(0,10);
+    else if(key=="genre"||key=="tcon")m.genre=value;
 }
 inline void metaComments(TrackDetails &m, const std::vector<unsigned char> &b) {
     size_t p = 0;

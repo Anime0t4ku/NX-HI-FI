@@ -19,7 +19,7 @@ private:
  std::string directory;mutable std::mutex mutex;std::condition_variable cv;bool quit=false;std::thread thread;
  std::set<std::string> requestedImages;CollectionJSON data;std::deque<std::function<void()>> jobs;uint64_t serial=0;std::string message;
  std::string nextID();bool saveLocked(std::string &);void loop();void enqueue(std::function<void()>);
- void scan(std::string,Source,std::string);void match(std::string,std::string,std::string);void artwork(std::string,std::string);
+ void scan(std::string,Source,std::string);void match(std::string,std::string,std::string,bool automatic=false);void artwork(std::string,std::string);
 public:
  explicit CollectionStore(std::string,Fetch=collectionHTTP);~CollectionStore();
  uint64_t revision()const;CollectionJSON snapshot()const;CollectionJSON command(const CollectionJSON &,const Settings &);

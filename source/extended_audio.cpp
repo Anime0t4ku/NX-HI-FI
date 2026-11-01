@@ -34,7 +34,7 @@ bool ExtendedAudio::open(Input &input,bool live,TrackDetails &m,std::string &err
  m.format=stream->codecpar->codec_id==AV_CODEC_ID_ALAC?"ALAC":stream->codecpar->codec_id==AV_CODEC_ID_AAC?"AAC":avcodec_get_name(stream->codecpar->codec_id);
  m.bitRate=stream->codecpar->bit_rate/1000;if(!live){if(s.format->duration>0)m.duration=s.format->duration/double(AV_TIME_BASE);else if(stream->duration>0)m.duration=stream->duration*av_q2d(stream->time_base);}
  auto text=[&](const char *key,std::string &out){auto *v=av_dict_get(s.format->metadata,key,nullptr,0);if(!v)v=av_dict_get(stream->metadata,key,nullptr,0);if(v)out=v->value;};
- text("title",m.title);text("artist",m.artist);text("album",m.album);return true;
+ text("title",m.title);text("artist",m.artist);text("album",m.album);text("album_artist",m.albumArtist);text("date",m.year);text("genre",m.genre);std::string disc,track;text("disc",disc);text("track",track);m.discNumber=std::max(0,std::atoi(disc.c_str()));m.trackNumber=std::max(0,std::atoi(track.c_str()));return true;
 }
 size_t ExtendedAudio::read(float *out,size_t wanted,std::string &error){auto &s=*impl;size_t done=0;
  while(done<wanted){if(s.at<s.pcm.size()){size_t n=std::min((wanted-done)*2,s.pcm.size()-s.at);std::copy_n(s.pcm.data()+s.at,n,out+done*2);s.at+=n;done+=n/2;continue;}

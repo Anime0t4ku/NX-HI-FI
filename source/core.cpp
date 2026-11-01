@@ -161,7 +161,7 @@ nlohmann::json settingsDocument(const Settings &s, bool secrets) {
             {"clock_24h", s.clock24h},
             {"show_artwork", s.showArtwork},
             {"hide_missing_art", s.hideMissingArt},
-            {"prefer_folder_art", s.preferFolderArt},
+            {"prefer_folder_art", s.preferFolderArt},{"playlist_artwork",s.playlistArtwork},
             {"visualizer", s.visualizer},
             {"visualizer_style",s.visualizerStyle},{"visualizer_sensitivity",s.visualizerSensitivity},
             {"visualizer_smoothing",s.visualizerSmoothing},{"visualizer_expand",s.visualizerExpand},
@@ -207,6 +207,7 @@ nlohmann::json settingFields() {
     add("manage_shares","SMB shares","Library","manager");
     add("manage_collections","Collections","Library","manager");
     add("manage_playlists","Playlists","Library","manager");
+    add("playlist_artwork","Use playlist artwork as player art","Library","bool");
     add("manage_radio","Online Radio","Library","manager");
     add("show_artwork", "Show artwork", "Artwork", "bool");
     add("hide_missing_art", "Hide missing artwork placeholder", "Artwork", "bool");
@@ -273,6 +274,7 @@ bool patchSettings(Settings &s, const nlohmann::json &patch, std::string &error)
             flag = &next.showArtwork;
         else if (key == "hide_missing_art")
             flag = &next.hideMissingArt;
+        else if(key=="playlist_artwork")flag=&next.playlistArtwork;
         else if (key == "prefer_folder_art")
             flag = &next.preferFolderArt;
         else if (key == "visualizer")

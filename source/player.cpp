@@ -161,6 +161,7 @@ void Player::previous() {
 }
 void Player::seek(double seconds) {
     std::lock_guard<std::mutex> lock(mutex_);
+    if(state_.track.source.root==RadioRoot)return;
     if (!state_.playing && !state_.busy)
         return;
     seek_ = std::max(0., (seek_ >= 0 ? seek_ : state_.position) + seconds);

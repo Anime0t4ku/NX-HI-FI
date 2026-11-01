@@ -19,7 +19,7 @@ public:
  void pause(){if(independent)command("playpause",J::object());else local_.pause();}
  void next(bool manual=true){if(independent)command("next",J::object());else local_.next(manual);}
  void previous(){if(independent)command("previous",J::object());else local_.previous();}
- void seek(double value){if(independent)command("seek",{{"seconds",value}});else local_.seek(value);}
+ void seek(double value){if(snapshot().track.source.root==RadioRoot)return;if(independent)command("seek",{{"seconds",value}});else local_.seek(value);}
  void tick(){if(!independent)local_.tick();}
  std::vector<Track> queue(){return independent?std::vector<Track>{}:local_.queue();}
 };

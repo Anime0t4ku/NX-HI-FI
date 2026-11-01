@@ -1,18 +1,19 @@
 AlbumPages albumPages;
+std::vector<std::string> openedCollectionAlbums;
 std::string collectionAlbumID,discSignature;
 bool discConnected=false;
 int collectionTileSelected=0,collectionTileScroll=0,collectionRootSelected=0;
 std::future<std::string> discProbe;
 Uint64 discProbeAt=0;
 const nlohmann::json *collectionAlbum(const std::string &id)const{for(auto &a:catalog["albums"])if(a["id"]==id)return &a;return nullptr;}
-bool requestAlbumPage(const std::string &id,bool refresh=false){if(independent){hostCommand("album_open",{{"id",id},{"refresh",refresh}});return true;}auto a=collectionAlbum(id);if(!a){status="Album no longer exists.";return false;}Source source;std::string error;if(!resolveReference((*a)["source"],settings,source,error)){status=error;return false;}albumPages.request(id,source,(*a)["path"],refresh);return true;}
+bool requestAlbumPage(const std::string &id,bool refresh=false){if(independent){hostCommand("album_open",{{"id",id},{"refresh",refresh}});return true;}auto a=collectionAlbum(id);if(!a){status="Album no longer exists.";return false;}if(std::find(openedCollectionAlbums.begin(),openedCollectionAlbums.end(),id)==openedCollectionAlbums.end()){openedCollectionAlbums.push_back(id);if(openedCollectionAlbums.size()>8)openedCollectionAlbums.erase(openedCollectionAlbums.begin());}lastPublish=0;if(refresh&&!a->value("busy",false))catalogCommand({{"op","album_refresh"},{"id",id}});return true;}
 mutable std::map<std::string,nlohmann::json> albumViewCache;
 mutable uint64_t albumViewRevision=~uint64_t(0),albumCatalogRevision=~uint64_t(0);
 const nlohmann::json &albumPage(const std::string &key)const{if(independent&&key.rfind("playlist:",0)!=0){auto &value=albumViewCache[key];value=key=="disc"?hostState.value("disc_view",nlohmann::json::object()):hostState.value("album_views",nlohmann::json::object()).value(key,nlohmann::json::object());return value;}
  auto viewRevision=albumPages.revision(),catalogRevision=catalog.value("revision",uint64_t(0));
  if(viewRevision!=albumViewRevision||catalogRevision!=albumCatalogRevision){albumViewCache.clear();albumViewRevision=viewRevision;albumCatalogRevision=catalogRevision;}
  auto it=albumViewCache.find(key);if(it!=albumViewCache.end())return it->second;
- auto make=[&]()->nlohmann::json{if(key.rfind("playlist:",0)==0){auto p=savedPlaylist(key.substr(9));if(!p)return nlohmann::json::object();double duration=0;for(auto &t:(*p)["tracks"])duration+=t.value("duration",0.);return {{"title",(*p)["name"]},{"artist","Playlist"},{"tracks",(*p)["tracks"]},{"ready",true},{"duration",duration},{"duration_complete",true},{"art_revision",p->value("image_revision",0)+1}};}auto data=albumPages.page(key);if(key!="disc")if(auto a=collectionAlbum(key)){data["title"]=a->value("title",std::string{});data["artist"]=a->value("artist",std::string{});data["year"]=a->value("year",std::string{});if(a->value("cover_revision",0)>0)data["has_artwork"]=true;}return data;};
+ auto make=[&]()->nlohmann::json{if(key.rfind("playlist:",0)==0){auto p=savedPlaylist(key.substr(9));if(!p)return nlohmann::json::object();double duration=0;for(auto &t:(*p)["tracks"])duration+=t.value("duration",0.);return {{"title",(*p)["name"]},{"artist","Playlist"},{"tracks",(*p)["tracks"]},{"ready",true},{"duration",duration},{"duration_complete",true},{"art_revision",p->value("image_revision",0)+1}};}auto data=albumPages.page(key);if(key!="disc")if(auto a=collectionAlbum(key)){data=*a;data["ready"]=!a->value("busy",false);data["error"]=a->value("available",true)?std::string{}:a->value("status",std::string{});data["art_revision"]=a->value("cover_revision",0);double duration=0;for(auto &t:data["tracks"]){t["title"]=t.value("title",t.value("name",std::string{}));duration+=t.value("duration",0.);}data["duration"]=duration;}if(key!="disc")if(auto a=collectionAlbum(key)){data["title"]=a->value("title",std::string{});data["artist"]=a->value("artist",std::string{});data["year"]=a->value("year",std::string{});if(a->value("cover_revision",0)>0)data["has_artwork"]=true;}return data;};
  return albumViewCache.emplace(key,make()).first->second;
 }
 std::vector<std::pair<std::string,int>> mainTabs()const{std::vector<std::pair<std::string,int>> tabs={{"Files",0},{"Collections",5},{"Playlists",9},{"Radio",6}};if(discConnected)tabs.push_back({"Disc",8});tabs.push_back({"Remote",4});tabs.push_back({"Settings",3});return tabs;}
@@ -20,7 +21,7 @@ int albumHeaderBottom()const{return 194+std::max(layout().x(132),156)+14;}
 int albumTrackTop()const{return albumHeaderBottom()+12;}
 int albumVisibleRows()const{return std::max(1,(155+layout().panelHeight()-albumTrackTop()-8)/46);}
 void playAlbumPage(const std::string &key,int index=0,bool shuffle=false){if(independent){if(key=="disc")hostCommand("disc_play",{{"index",index},{"shuffle",shuffle}});else if(key.rfind("playlist:",0)==0)hostCommand("playlist_play",{{"id",key.substr(9)},{"index",index},{"shuffle",shuffle}});else hostCommand("album_track",{{"id",key},{"index",index},{"shuffle",shuffle}});return;}auto data=albumPage(key);auto rows=data.value("tracks",nlohmann::json::array());if(rows.empty()){status="No tracks available yet.";return;}Source source;
- if(key.rfind("playlist:",0)==0){std::vector<Track> queue;for(auto &row:rows){Source src;std::string error;if(!resolveReference(row["source"],settings,src,error)){status=error;return;}queue.push_back({src,row["path"],row["title"]});}if(index<0||index>=int(queue.size()))return;if(shuffle){std::mt19937 engine{unsigned(SDL_GetTicks64())};std::shuffle(queue.begin(),queue.end(),engine);index=0;}player.play(std::move(queue),index);if(settings.autoFullscreen&&!fullscreen)toggleFullscreen();return;}
+ if(key.rfind("playlist:",0)==0){std::vector<Track> queue;for(auto &row:rows){Source src;std::string error;if(!resolveReference(row["source"],settings,src,error)){status=error;return;}queue.push_back({src,row["path"],row["title"],key.substr(9)});}if(index<0||index>=int(queue.size()))return;if(shuffle){std::mt19937 engine{unsigned(SDL_GetTicks64())};std::shuffle(queue.begin(),queue.end(),engine);index=0;}player.play(std::move(queue),index);if(settings.autoFullscreen&&!fullscreen)toggleFullscreen();return;}
  if(key=="disc"){if(!discConnected||discSignature.empty()){status="Insert audio CD";return;}source={false,{},DiscRoot};}else{auto a=collectionAlbum(key);std::string error;if(!a||!resolveReference((*a)["source"],settings,source,error)){status=error.empty()?"Album unavailable.":error;return;}}
  std::vector<Track> tracks;for(auto &row:rows)tracks.push_back({source,row.at("path"),row.at("title")});if(index<0||index>=int(tracks.size()))return;if(shuffle){std::mt19937 engine{unsigned(SDL_GetTicks64())};std::shuffle(tracks.begin(),tracks.end(),engine);index=0;}player.play(std::move(tracks),index);if(settings.autoFullscreen&&!fullscreen)toggleFullscreen();}
 void refreshDiscPage(){if(independent){hostCommand("disc_refresh");return;}albumPages.invalidate("disc");discSignature.clear();discProbeAt=0;}
@@ -54,8 +55,10 @@ void drawAlbumPage(const Playback &playing){ui.rect(28,155,828,layout().panelHei
  auto &track=tracks[i];int y=albumTrackTop()+(i-first)*46;bool focus=!controlsFocused&&selected==i;
  bool current=playing.playing&&playing.track.path==track["path"]&&(disc?playing.track.source.root==DiscRoot:page==10?sourceReference(playing.track.source)==track["source"]:collectionAlbum(key)&&sourceReference(playing.track.source)==(*collectionAlbum(key))["source"]);
  if(focus)ui.roundedRect(42,y,800,43,FOCUS,7);
- ui.text(54,y+11,std::to_string(i+1),14,current?ACCENT:MUTED,34);std::string artist=track.value("artist",std::string{});bool different=!artist.empty()&&artist!=data.value("artist",std::string{});
+ ui.text(54,y+11,std::to_string(i+1),14,current?ACCENT:MUTED,34);std::string artist=track.value("artist",std::string{});if(!disc&&tracks.back().value("disc",1)>1)artist="Disc "+std::to_string(track.value("disc",1))+" · "+artist;bool different=!artist.empty()&&artist!=data.value("artist",std::string{});
  ui.text(96,y+(different?2:10),track.value("title",std::string{}),17,current||focus?ACCENT:TEXT,620);if(different)ui.text(96,y+25,artist,12,MUTED,620);
  double length=track.value("duration",0.);ui.rightText(824,y+12,length>0?timeLabel(length):"--:--",14,MUTED);
  }
 }
+
+nlohmann::json publishedAlbumViews()const{auto views=albumPages.snapshot();for(auto &id:openedCollectionAlbums)if(collectionAlbum(id))views[id]=albumPage(id);return views;}

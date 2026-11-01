@@ -298,8 +298,8 @@ class App {
                 return std::string(preset.name) + "  " + settings.accent;
         return "Custom  " + settings.accent;
     }
-    bool scrubHit(int x, int y) const {
-        return seekRect().contains(x,y);
+    bool scrubHit(int x, int y) {
+        return player.snapshot().track.source.root!=RadioRoot&&seekRect().contains(x,y);
     }
     void previewScrub(int x) {
         auto p = player.snapshot();
@@ -588,6 +588,7 @@ class App {
             if (!applySettings({{"volume", j.at("value")}}))
                 return fail(status);
         } else if (op == "seek" || op == "seek_to") {
+            if(player.snapshot().track.source.root==RadioRoot)return {{"ok",true}};
             const auto &value = j.at(op == "seek" ? "seconds" : "position");
             if (!value.is_number())
                 return fail("Invalid seek position.");
@@ -636,7 +637,7 @@ class App {
         J structure={{"identity",remoteIdentity()}, {"app_id","nx-hifi"}, {"protocol_version",1}, {"listening_mode",listening},
                 {"version", Version},
                 {"catalog",catalog},
-                {"album_views",albumPages.snapshot()},{"disc_connected",discConnected},{"disc_ejecting",discEjecting},{"disc_eject_error",discEjectError},{"disc_signature",discSignature},{"disc_view",albumPage("disc")},
+                {"album_views",publishedAlbumViews()},{"disc_connected",discConnected},{"disc_ejecting",discEjecting},{"disc_eject_error",discEjectError},{"disc_signature",discSignature},{"disc_view",albumPage("disc")},
                 {"local_sources",localSources},
                 {"physical_disc",discConnected},
                 {"revision", revision},
@@ -664,9 +665,9 @@ class App {
                   {"playing", p.playing},
                   {"paused", p.paused},
                   {"busy", p.busy},
-                  {"error", p.error},
+                  {"error", visibleNotice(p.error,true)},
                   {"spectrum", p.spectrum},
-                  {"track_path",p.track.path},{"source_ref",sourceReference(p.track.source)},
+                  {"playlist_id",p.track.playlist},{"track_path",p.track.path},{"source_ref",sourceReference(p.track.source)},
                   {"track_key", p.track.source.share.server + "/" + p.track.source.share.share +
                                     "/" + p.track.source.root + "/" + p.track.path}}}});
         return result;
@@ -1212,6 +1213,7 @@ class App {
         if(visualizerFullscreen){visualizerFullscreen=false;return;}
         if (optionApply) {
             optionApply = nullptr;
+            matchAlbumID.clear();
             return;
         }
         if(colourPicking){closeColours(false);return;}
@@ -1438,11 +1440,11 @@ class App {
         }
     }
     void drawSeek(const Playback &p){
-        auto a=seekRect();bool focus=!listening&&(controlsFocused||fullscreen)&&playerFocus().seek();
+        auto a=seekRect();bool focus=p.track.source.root!=RadioRoot&&!listening&&(controlsFocused||fullscreen)&&playerFocus().seek();
         if(focus){ui.roundedRect(a.x-5,a.y-5,a.w+10,a.h+10,ACCENT,10);ui.roundedRect(a.x-3,a.y-3,a.w+6,a.h+6,PANEL,8);}
         double position=scrubbing?scrubPosition:p.position;
         int y=a.y+12;ui.rect(a.x,y,a.w,5,LINE);
-        if(p.duration>0){int offset=int(a.w*std::clamp(position/p.duration,0.,1.));ui.rect(a.x,y,offset,5,ACCENT);ui.rect(a.x+std::clamp(offset,4,a.w-4)-4,y-4,8,13,ACCENT);}
+        if(p.track.source.root!=RadioRoot&&p.duration>0){int offset=int(a.w*std::clamp(position/p.duration,0.,1.));ui.rect(a.x,y,offset,5,ACCENT);ui.rect(a.x+std::clamp(offset,4,a.w-4)-4,y-4,8,13,ACCENT);}
         ui.text(a.x,a.y+30,timeLabel(position),fullscreen?18:14,MUTED);
         auto duration=p.track.source.root==RadioRoot?std::string("LIVE"):p.duration>0?(p.details.durationEstimated?"~":"")+timeLabel(p.duration):"--:--";
         ui.rightText(a.x+a.w,a.y+30,duration,fullscreen?18:14,MUTED);
@@ -1495,7 +1497,9 @@ class App {
         ui.button(198+(52), 531, 360, 44, "Save colour", colourSelection == 14);
         ui.button(198+(432), 531, 380, 44, "Cancel", colourSelection == 15);
     }
-    void drawControls(const Playback &p,const std::string &message){
+    mutable std::string lastStatusNotice,lastPlaybackNotice;mutable Uint64 statusNoticeAt=0,playbackNoticeAt=0;
+    std::string visibleNotice(const std::string &message,bool playback=false)const{auto &last=playback?lastPlaybackNotice:lastStatusNotice;auto &at=playback?playbackNoticeAt:statusNoticeAt;if(message!=last){last=message;at=SDL_GetTicks64();}return !message.empty()&&SDL_GetTicks64()-at>=6000?std::string{}:message;}
+    void drawControls(const Playback &p,const std::string &rawMessage){auto message=visibleNotice(rawMessage,!p.error.empty()&&rawMessage==p.error);
         if(!colourPicking){drawSeek(p);if(!listening)drawPlayerButtons(p);}
         // Status/errors stay visible outside the compact controls-only footer.
         if(!message.empty())ui.text(fullscreen?30:600,fullscreen?90:64,message,13,ACCENT,fullscreen?1210:620);
@@ -1834,9 +1838,10 @@ class App {
     }
     Uint64 storagePollAt=0;std::vector<StorageDevice> cachedDevices;
     void update() {
-        if(independent){updateIndependent();return;}
+        if(independent){updateIndependent();pollAlbumMatches();return;}
         if(nativeTarget){nativeTarget->update();if(nativeTarget->independentDisconnect){auto message=nativeTarget->status;closeNativeRemote();status=std::move(message);}}
         if(collection&&SDL_GetTicks64()-catalogAt>500){catalogAt=SDL_GetTicks64();refreshCatalog();}
+        pollAlbumMatches();
         if(!storagePollAt||SDL_GetTicks64()-storagePollAt>=500){cachedDevices=detectedStorageDevices();storagePollAt=SDL_GetTicks64();}
         auto devices=cachedDevices;
         bool connected=std::any_of(devices.begin(),devices.end(),[](const auto &device){return device.id==-2;});
@@ -1918,7 +1923,9 @@ class App {
         if(p.playing&&!p.busy&&!p.track.path.empty()&&metadataKey!=tagKey){tagKey=metadataKey;if(lower(p.track.path).size()>=5&&lower(p.track.path).substr(p.track.path.size()-5)==".flac")tags.request(p.track.source,p.track.path,3);else tags.cancel();}
         LoadResult tagResult;if(tags.poll(tagResult)&&tagResult.ok)player.metadata(tagResult.details,tagResult.source,tagResult.path);
         Source artworkSource=p.track.source;int stationArtRevision=0;if(p.track.source.root==RadioRoot)for(auto &station:catalog["stations"])if(station["url"]==p.track.path){artworkSource.share.folder=station.value("logo",std::string{});artworkSource.share.domain=collection->imagePath("station",station["id"]);stationArtRevision=station.value("image_revision",0);break;}
-        auto key = std::to_string(stationArtRevision)+artworkSource.share.folder+"/"+p.track.source.share.server + "/" + p.track.source.share.share + "/" +
+        if(!p.track.playlist.empty())collection->ensureImage("playlist",p.track.playlist);
+        auto playlistArt=playlistPlayerArtwork(p);
+        auto key = playlistArt+"/"+std::to_string(catalog.value("revision",uint64_t(0)))+"/"+std::to_string(preferPlaylistArtwork(p))+"/"+std::to_string(stationArtRevision)+artworkSource.share.folder+"/"+p.track.source.share.server + "/" + p.track.source.share.share + "/" +
                    p.track.source.root + "/" + p.track.path +
                    (settings.preferFolderArt ? "/folder-first" : "/embedded-first");
         if(auto album=playbackAlbum(p))key+="/album-art-"+std::to_string(album->value("cover_revision",0));
@@ -1947,7 +1954,7 @@ class App {
             if (remote)
                 remote->artwork({});
             playbackTrace("main.artwork.request");
-            art.request(artworkSource, p.track.path, 2, settings.preferFolderArt);
+            art.request(artworkSource, p.track.path, 2, settings.preferFolderArt,playlistArt,preferPlaylistArtwork(p));
         }
         if (art.poll(result) && settings.showArtwork) {
             if(result.cover.empty())if(auto album=playbackAlbum(p)){std::ifstream f(collection->coverPath(album->at("id")),std::ios::binary);result.cover.assign(std::istreambuf_iterator<char>(f),{});}
