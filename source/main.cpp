@@ -1533,6 +1533,7 @@ class App {
         setAppearance(settings.theme, settings.accent,settings.menuOpacity,settings.look);
     }
     ~App() {
+        if(hostArtworkWork.valid())hostArtworkWork.wait();
         if(tileWork.valid())tileWork.get();
         probeCancel = true;
         scanner.cancel();

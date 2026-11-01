@@ -12,7 +12,7 @@
 #include <vector>
 
 namespace nxh {
-constexpr const char *Version = "2.0.0";
+constexpr const char *Version = "2.0.1";
 // Additive identity: legacy NX clients still use the existing wire format.
 inline nlohmann::json remoteIdentity(){
     return {{"app_id","nx-hifi"},{"name","NX Hi-Fi"},{"platform","switch"},

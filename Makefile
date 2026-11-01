@@ -8,7 +8,7 @@ endif
 
 APP_TITLE := NX Hi-Fi
 APP_AUTHOR := Anime0t4ku
-APP_VERSION := 2.0.0
+APP_VERSION := 2.0.1
 ICON := icon.jpg
 export TOPDIR ?= $(CURDIR)
 include $(DEVKITPRO)/libnx/switch_rules

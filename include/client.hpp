@@ -21,6 +21,7 @@ class ClientSession {
     uint64_t request(std::string method, std::string path, Json body = Json::object());
     bool poll(Result &);
     Json snapshot();
+    bool snapshotIfChanged(uint64_t &sequence, Json &state);
     bool connected() const {
         return connected_;
     }
@@ -42,6 +43,7 @@ class ClientSession {
     int eventFd_ = -1, commandFd_ = -1;
     uint64_t nextId_ = 0;
     Json state_ = Json::object();
+    uint64_t stateSequence_ = 0;
     std::string error_;
     bool screen_ = false;
     int connectSocket(bool event);

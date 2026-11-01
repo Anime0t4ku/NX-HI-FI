@@ -85,6 +85,11 @@ ClientSession::Json ClientSession::snapshot() {
     std::lock_guard<std::mutex> lock(mutex_);
     return state_;
 }
+bool ClientSession::snapshotIfChanged(uint64_t &sequence,Json &state){
+    std::lock_guard<std::mutex> lock(mutex_);
+    if(sequence==stateSequence_)return false;
+    state=state_;sequence=stateSequence_;return true;
+}
 std::string ClientSession::error() {
     std::lock_guard<std::mutex> lock(mutex_);
     return error_;
@@ -218,7 +223,8 @@ ClientSession::Result ClientSession::http(const Job &job) {
         bytes = std::move(decoded);
     }
     result.bytes = std::move(bytes);
-    result.data = Json::parse(result.bytes, nullptr, false);
+    const bool binary=job.path.rfind("/api/art",0)==0||job.path.rfind("/api/album-art/",0)==0||job.path.rfind("/api/screen/art",0)==0;
+    result.data = binary ? Json() : Json::parse(result.bytes, nullptr, false);
     result.ok = response.compare(9, 3, "200") == 0;
     if (result.ok && result.data.is_discarded() && job.path.rfind("/api/art", 0) != 0 && job.path.rfind("/api/album-art/",0)!=0 &&
         job.path.rfind("/api/screen/art", 0) != 0) {
@@ -255,12 +261,13 @@ void ClientSession::commandLoop() {
     }
 }
 void ClientSession::eventLoop() {
+    bool delta=!screen_&&(config.type=="nx"||config.type=="prospero");
     while (!quit_) {
         int fd = connectSocket(true);
         bool open = false;
         if (fd >= 0) {
             auto key = websocketKey();
-            std::string req = std::string("GET ") + (screen_ ? "/ws?screen=1" : "/ws") +
+            std::string req = std::string("GET ") + (screen_ ? "/ws?screen=1" : delta ? "/ws?delta=1" : "/ws") +
                               " HTTP/1.1\r\nHost: " + config.host + ":" +
                               std::to_string(config.port) +
                               "\r\nUpgrade: websocket\r\nConnection: "
@@ -275,6 +282,7 @@ void ClientSession::eventLoop() {
                 open = header.size() >= 12 && header.compare(9, 3, "101") == 0 &&
                        header.find(websocketAccept(key)) != std::string::npos;
             }
+            if(!open&&delta)delta=false; // Older NX hosts expose full-state /ws only.
             if (open) {
                 connected_ = true;
                 {
@@ -304,7 +312,13 @@ void ClientSession::eventLoop() {
                         auto j = Json::parse(data, nullptr, false);
                         if (j.is_object()) {
                             std::lock_guard<std::mutex> lock(mutex_);
-                            state_ = std::move(j);
+                            // Retain the full state when a host sends a playback-only delta.
+                            // The UI may miss intermediate frames while drawing/loading artwork.
+                            if(j.contains("update")&&j["update"].is_object()){
+                                if(!state_.contains("settings"))continue;
+                                state_.update(j["update"]);
+                            }else state_=std::move(j);
+                            ++stateSequence_;
                         }
                     }
                 }

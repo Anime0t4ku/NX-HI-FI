@@ -54,3 +54,9 @@ $(BUILD)/smb_startup_test.o: tests/smb_startup_test.cpp $(wildcard include/*.hpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 build-host/smb-startup-test: $(BUILD)/smb_startup_test.o $(filter-out $(BUILD)/main.o,$(OBJECTS)) build-host/decoder.o build-host/cover_codec.o
 	$(CXX) -pthread $^ $(HOST_SMB_LIB) $(HOST_EXTRA_LIBS) -lm -lz -ldl -Wl,--wrap=smb2_connect_share -Wl,--wrap=smb2_open -Wl,--wrap=smb2_fstat -Wl,--wrap=smb2_pread -Wl,--wrap=smb2_close -o $@
+
+build-host/collection-fat-test: tests/collection_fat_test.cpp $(filter-out $(BUILD)/main.o,$(OBJECTS)) build-host/decoder.o build-host/cover_codec.o
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $^ $(HOST_SMB_LIB) $(HOST_EXTRA_LIBS) -lm -lz -ldl -Wl,--wrap=rename -o $@
+.PHONY: test-collection-fat
+test-collection-fat: build-host/collection-fat-test
+	./build-host/collection-fat-test

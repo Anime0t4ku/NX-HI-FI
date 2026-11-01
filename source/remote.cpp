@@ -294,7 +294,7 @@ bool RemoteServer::serve(int fd) {
     if (method == "GET" && path == "/api/info") {
         jsonResponse(fd, {{"app", "NX Hi-Fi"},
                           {"identity",remoteIdentity()}, {"app_id","nx-hifi"}, {"protocol_version",1},
-                          {"name", "NX Hi-Fi"}, {"platform", "ps5"}, {"outgoing_remote", false},
+                          {"name", "NX Hi-Fi"}, {"platform", "switch"}, {"outgoing_remote", true},
                           {"version", Version},
                           {"port", 8182},
                           {"screen_control", false}});
