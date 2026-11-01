@@ -17,6 +17,7 @@ class SmbSession {
 std::unique_ptr<Input> openInput(const Source &, const std::string &, std::string &,
                                  const std::atomic<uint64_t> *generation = nullptr,
                                  uint64_t expected = 0);
+void shutdownSMB();
 bool listDirectory(const Source &, const std::string &, std::vector<Entry> &, std::string &);
 std::vector<unsigned char> loadCover(const Source &, const std::string &track,
                                      bool preferFolder = false);

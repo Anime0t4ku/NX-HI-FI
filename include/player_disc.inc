@@ -27,6 +27,7 @@ void Player::decodeDisc(Track track, uint64_t gen) {
     uint64_t decoded = 0, origin = 0;
     bool eof = false, started = false;
     Equalizer eq;
+    AudioAnalysis analysis;
     std::mt19937 rng(SDL_GetTicks());
     std::vector<unsigned char> pcm(2048 * 4);
     std::vector<float> samples(2048 * 2);
@@ -60,9 +61,10 @@ void Player::decodeDisc(Track track, uint64_t gen) {
                 SDL_ClearQueuedAudio(device_);
                 state_.busy = true;
                 state_.position = frames / 44100.;
+                resetVisualsLocked(frames);
             }
             input = std::move(next);track = audibleTrack;producingIndex = audibleIndex;
-            decoded = frames;origin = 0;transitions.clear();eof = started = false;eq.reset();
+            decoded = frames;origin = 0;transitions.clear();eof = started = false;eq.reset();analysis.reset(decoded);
         }
         auto queued = SDL_GetQueuedAudioSize(device_);
         uint64_t audible = decoded - std::min<uint64_t>(decoded, queued / (2 * sizeof(float)));
@@ -89,7 +91,7 @@ void Player::decodeDisc(Track track, uint64_t gen) {
                 std::lock_guard<std::mutex> lock(mutex_);
                 if (generation_ == gen) {
                     state_.playing = state_.busy = false;state_.ended = true;
-                    state_.position = state_.duration;state_.spectrum = {};
+                    state_.position = state_.duration;state_.spectrum = {};state_.waveLeft={};state_.waveRight={};
                 }
                 return;
             }
@@ -134,26 +136,16 @@ void Player::decodeDisc(Track track, uint64_t gen) {
         }
         eq.configure(settings.eqEnabled, settings.eq);
         eq.process(samples.data(), frames);
+        auto visualFrames=analysis.push(samples.data(),frames);
         float volume = settings.volume / 100.f;
         for (size_t i = 0; i < frames * 2; ++i) samples[i] *= volume;
-        std::array<float,32> spectrum{};
-        if (frames >= 256 && settings.visualizer)
-            for (int b=0;b<32;++b) {
-                double re=0,im=0;
-                for (int i=0;i<256;++i) {
-                    float mono=(samples[i*2]+samples[i*2+1])*.5f;
-                    re+=mono*cosines_[b][i];im+=mono*sines_[b][i];
-                }
-                float db=20*std::log10(std::max(1e-6,std::sqrt(re*re+im*im)/64.));
-                spectrum[b]=std::clamp((db+60)/60.,0.,1.);
-            }
         {
             std::lock_guard<std::mutex> lock(mutex_);
             if (generation_ != gen) return;
             if (SDL_QueueAudio(device_, samples.data(), frames * 2 * sizeof(float)) != 0) {
                 state_.error = "Could not queue CD audio.";state_.playing = state_.busy = false;return;
             }
-            decoded += frames;state_.spectrum = spectrum;
+            decoded += frames;publishVisualsLocked(std::move(visualFrames),decoded);
             if (!started && SDL_GetQueuedAudioSize(device_) >= 44100 * 2 * sizeof(float) * 0.35) {
                 started = true;state_.busy = false;state_.playing = true;
                 SDL_PauseAudioDevice(device_, state_.paused);

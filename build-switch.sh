@@ -13,6 +13,7 @@ done
 [ -f "$DEVKITPRO/portlibs/switch/include/SDL2/SDL_ttf.h" ] || { echo 'Install switch-sdl2, switch-sdl2_ttf and switch-sdl2_image.' >&2; exit 1; }
 [ -f "$DEVKITPRO/portlibs/switch/include/curl/curl.h" ] || { echo 'Install switch-curl.' >&2; exit 1; }
 [ -f "$DEVKITPRO/portlibs/switch/include/mbedtls/md5.h" ] || { echo 'Install switch-mbedtls.' >&2; exit 1; }
+[ -f "$DEVKITPRO/portlibs/switch/include/libavformat/avformat.h" ] || { echo "Install switch-ffmpeg." >&2; exit 1; }
 cmake -S third_party/libsmb2 -B build-deps/smb2 \
     -DCMAKE_TOOLCHAIN_FILE="$DEVKITPRO/cmake/Switch.cmake" \
     -DCMAKE_INSTALL_PREFIX="$PWD/build-deps/install" \

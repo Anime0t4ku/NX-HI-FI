@@ -1,5 +1,7 @@
 #pragma once
 #include "storage.hpp"
+#include "metadata.hpp"
+#include "cover_image.hpp"
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -9,8 +11,10 @@ struct LoadResult {
     bool ready = false, ok = false, preferFolder = false;
     Source source;
     std::string path, error;
+    TrackDetails details;
     std::vector<Entry> entries;
-    std::vector<unsigned char> cover;
+    std::vector<unsigned char> cover,encoded;
+    std::shared_ptr<SDL_Surface> surface;
 };
 class Loader {
     std::mutex mutex_;
@@ -32,8 +36,12 @@ class Loader {
                 gen = generation_;
                 pending_ = false;
             }
-            if (job.kind == 2) {
+            if(job.kind==3){std::string error;auto input=openInput(job.source,job.path,error);if(input){job.details=readTrackDetails(*input,job.path);job.ok=true;}}
+            else if (job.kind == 2) {
                 job.cover = loadCover(job.source, job.path, job.preferFolder);
+                auto *surface=boundedCoverSurface(job.cover);
+                if(surface&&std::max(surface->w,surface->h)>512){float ratio=512.f/std::max(surface->w,surface->h);auto *small=SDL_CreateRGBSurfaceWithFormat(0,std::max(1,int(surface->w*ratio)),std::max(1,int(surface->h*ratio)),32,SDL_PIXELFORMAT_RGBA32);if(small){SDL_SetSurfaceBlendMode(surface,SDL_BLENDMODE_NONE);SDL_BlitScaled(surface,nullptr,small,nullptr);SDL_FreeSurface(surface);surface=small;}}
+                if(surface){job.encoded=remoteCoverJpeg(surface);job.surface=std::shared_ptr<SDL_Surface>(surface,SDL_FreeSurface);}
                 job.ok = true;
             } else {
                 job.ok = listDirectory(job.source, job.path, job.entries, job.error);

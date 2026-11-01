@@ -1,6 +1,5 @@
 #pragma once
 #include "player_icons.hpp"
-#include <cstring>
 #include "core.hpp"
 #include "layout.hpp"
 #include "cover_image.hpp"
@@ -9,12 +8,13 @@
 #include <SDL_image.h>
 #include <SDL_ttf.h>
 #include <unordered_map>
+#include <cstring>
 namespace nxh {
 struct Color {
     Uint8 r, g, b, a = 255;
 };
 inline Color BG{32, 32, 32}, PANEL{42, 42, 42}, LINE{76, 76, 76}, TEXT{245, 245, 245},
-    MUTED{183, 183, 183}, ACCENT{239, 68, 68}, PRIMARY{239, 68, 68}, FOCUS{65, 38, 38},
+    MUTED{183, 183, 183}, ACCENT{59, 130, 246}, PRIMARY{59, 130, 246}, FOCUS{65, 38, 38},
     FOOTER{26, 26, 26};
 inline Color rgbColour(const std::string &hex) {
     auto c = colourRGB(hex);
@@ -41,26 +41,50 @@ inline Color readableAccent(Color c, Color background) {
     }
     return c;
 }
-inline void setAppearance(const std::string &theme, const std::string &accent) {
+inline bool ModernLook=true;
+inline void setAppearance(const std::string &theme, const std::string &accent,int opacity=85,const std::string &look="modern") {
+    ModernLook=look!="classic";
     bool light = theme == "light", oled = theme == "oled";
-    BG = light ? Color{255, 255, 255} : oled ? Color{0, 0, 0} : Color{32, 32, 32};
-    PANEL = light ? Color{244, 244, 244} : oled ? Color{0, 0, 0} : Color{42, 42, 42};
-    FOOTER = light ? Color{240, 240, 240} : oled ? Color{0, 0, 0} : Color{26, 26, 26};
-    LINE = light ? Color{198, 198, 198} : Color{76, 76, 76};
+    BG = light ? Color{255, 255, 255} : oled ? Color{0, 0, 0} : Color{12, 18, 32};
+    PANEL = light ? Color{244, 244, 244} : oled ? Color{0, 0, 0} : Color{22, 31, 49};
+    PANEL.a=Uint8(std::clamp(opacity,50,100)*255/100);
+    FOOTER = light ? Color{240, 240, 240} : oled ? Color{0, 0, 0} : Color{9, 14, 25};
+    LINE = light ? Color{198, 198, 198} : Color{48, 64, 88};
     TEXT = light ? Color{25, 25, 25} : Color{245, 245, 245};
     MUTED = light ? Color{87, 87, 87} : Color{183, 183, 183};
     PRIMARY = rgbColour(accent);
     ACCENT = readableAccent(PRIMARY, BG);
     auto mix = [](int a, int b) { return Uint8((a * 4 + b) / 5); };
-    FOCUS = {mix(PANEL.r, PRIMARY.r), mix(PANEL.g, PRIMARY.g), mix(PANEL.b, PRIMARY.b)};
+    FOCUS = {mix(PANEL.r, PRIMARY.r), mix(PANEL.g, PRIMARY.g), mix(PANEL.b, PRIMARY.b),PANEL.a};
+    if(FOCUS.r==PANEL.r&&FOCUS.g==PANEL.g&&FOCUS.b==PANEL.b)FOCUS.r=FOCUS.r<255?FOCUS.r+1:254;
 }
 class UI {
     SDL_Renderer *r_;
-    double rasterScale_ = 1.0;
+    double rasterScale_ = 1.25;
+    SDL_Texture *backdrop_ = nullptr,*ambientGlow_=nullptr;
+    std::vector<SDL_Vertex> ambientVertices_;std::vector<int> ambientIndices_;
+    bool animatedBackground_=true;int backgroundAnimation_=1;float backgroundSpeed_=1;double backgroundTime_=0;Uint64 backgroundTick_=0;
+    uint64_t backdropKey_ = 0;
+    int backdropWidth_=0,backdropHeight_=0;
     void fillRounded(SDL_Rect a, Color color, int radius) {
         SDL_SetRenderDrawColor(r_, color.r,color.g,color.b,color.a);
         radius=std::min({radius,a.w/2,a.h/2});
         if(radius<=0){SDL_RenderFillRect(r_,&a);return;}
+        if(color.a<255){
+            // One non-overlapping fan: translucent spans must not darken at joins.
+            SDL_Vertex v[37]{};int indices[108]{};
+            bool glass=ModernLook&&color.a<245&&(BG.r||BG.g||BG.b)&&((color.r==PANEL.r&&color.g==PANEL.g&&color.b==PANEL.b)||(color.r==FOCUS.r&&color.g==FOCUS.g&&color.b==FOCUS.b));
+            auto shade=[&](float y){float sheen=glass?std::clamp(1.f-(y-a.y)/std::max(1,a.h),0.f,1.f)*.045f:0.f;return SDL_Color{Uint8(color.r+(255-color.r)*sheen),Uint8(color.g+(255-color.g)*sheen),Uint8(color.b+(255-color.b)*sheen),color.a};};
+            SDL_Color tint=shade(a.y+a.h*.5f);v[0]={{a.x+a.w*.5f,a.y+a.h*.5f},tint,{0,0}};
+            for(int corner=0;corner<4;corner++)for(int step=0;step<9;step++){
+                float cx=corner<2?a.x+a.w-radius:a.x+radius,cy=corner==0||corner==3?a.y+radius:a.y+a.h-radius;
+                double angle=(-.5+corner*.5+step/16.)*3.141592653589793;
+                int n=corner*9+step;v[n+1]={{cx+float(std::cos(angle)*radius),cy+float(std::sin(angle)*radius)},shade(cy+float(std::sin(angle)*radius)),{0,0}};
+                indices[n*3]=0;indices[n*3+1]=n+1;indices[n*3+2]=(n+1)%36+1;
+            }
+            SDL_RenderGeometry(r_,nullptr,v,37,indices,108);
+            if(glass&&a.w>radius*2){SDL_SetRenderDrawColor(r_,255,255,255,BG.r>200?65:24);SDL_Rect top{a.x+radius,a.y,a.w-radius*2,1};SDL_RenderFillRect(r_,&top);SDL_SetRenderDrawColor(r_,0,0,0,22);SDL_Rect bottom{a.x+radius,a.y+a.h-1,a.w-radius*2,1};SDL_RenderFillRect(r_,&bottom);}return;
+        }
         // Large opaque areas use SDL's fast rectangle path. Only the tiny
         // corner arcs need triangle rasterisation (important for CPU rendering at 4K).
         // Small internal overlaps avoid fractional-scale seams between fast spans and arcs.
@@ -88,6 +112,8 @@ class UI {
     bool recording_ = false;
     nlohmann::json screenOps_ = nlohmann::json::array();
     std::unordered_map<SDL_Texture *, std::vector<unsigned char>> screenImages_;
+    std::unordered_map<SDL_Texture *,Uint64> imageBirth_;
+    std::map<std::pair<int,int>,Uint64> focusBirth_;
     std::vector<unsigned char> screenCover_;
     void record(nlohmann::json op) {
         if (recording_ && screenOps_.size() < 4096)
@@ -120,11 +146,13 @@ class UI {
     struct Label {
         SDL_Texture *texture;
         int w, h;
+        uint64_t touched=0;
     };
     std::unordered_map<std::string, Label> labels_;
-    struct BadgeLabel{SDL_Texture *texture;int width,height,left,inkWidth;};
+    uint64_t labelFrame_=0;
+    struct BadgeLabel{SDL_Texture *texture;int width,height,left,inkWidth;uint64_t touched=0;};
     std::unordered_map<std::string,BadgeLabel> badgeLabels_;
-    struct Icon{SDL_Texture *texture;std::vector<std::array<int,3>> runs;};
+    struct Icon{SDL_Texture *texture;std::vector<std::array<int,3>> runs;uint64_t touched=0;};
     std::unordered_map<std::string,Icon> icons_;
     std::unordered_map<std::string, int> measuredWidths_;
     std::unordered_map<std::string, std::string> fittedText_;
@@ -154,11 +182,13 @@ class UI {
     };
     UI(SDL_Renderer *r, const void *data, size_t size) : r_(r), fontData_(data), fontSize_(size) {}
     ~UI() {
+        SDL_DestroyTexture(backdrop_);SDL_DestroyTexture(ambientGlow_);
         clear();
         for (auto &v : fonts_)
             TTF_CloseFont(v.second);
     }
     void releaseCover(SDL_Texture *texture) {
+        imageBirth_.erase(texture);
         screenImages_.erase(texture);
         SDL_DestroyTexture(texture);
     }
@@ -256,11 +286,16 @@ class UI {
     int pointerX(int x) const {
         return layout_.designX(x);
     }
+    void scrollIndicator(int x,int y,int height,int total,int first,int visible){
+        if(total<=visible||visible<=0)return;
+        int thumb=std::max(14,height*visible/total);
+        int offset=(height-thumb)*std::clamp(first,0,total-visible)/std::max(1,total-visible);
+        roundedRect(x,y,3,height,Color{MUTED.r,MUTED.g,MUTED.b,55},2);
+        roundedRect(x,y+offset,3,thumb,Color{ACCENT.r,ACCENT.g,ACCENT.b,190},2);
+    }
     void clear() {
-        for(auto &entry:badgeLabels_) SDL_DestroyTexture(entry.second.texture);
-        badgeLabels_.clear();
-        for(auto &entry:icons_) SDL_DestroyTexture(entry.second.texture);
-        icons_.clear();
+        for(auto &entry:badgeLabels_)SDL_DestroyTexture(entry.second.texture);badgeLabels_.clear();
+        for(auto &entry:icons_)SDL_DestroyTexture(entry.second.texture);icons_.clear();
         measuredWidths_.clear();fittedText_.clear();
         for (auto &v : labels_)
             SDL_DestroyTexture(v.second.texture);
@@ -273,21 +308,24 @@ class UI {
             f = TTF_OpenFontRW(SDL_RWFromConstMem(fontData_, fontSize_), 1, size);
         return f;
     }
+    bool focusColour(Color c)const{return c.r==FOCUS.r&&c.g==FOCUS.g&&c.b==FOCUS.b&&c.a==FOCUS.a;}
+    void focusStroke(SDL_Rect box,int radius){constexpr int count=36;SDL_Vertex vertices[count*2]{};int indices[count*6]{};SDL_Color color{ACCENT.r,ACCENT.g,ACCENT.b,255};for(int corner=0;corner<4;corner++)for(int step=0;step<9;step++){double angle=(-.5+corner*.5+step/16.)*3.141592653589793;int i=corner*9+step;float cx=corner<2?box.x+box.w-radius:box.x+radius,cy=corner==0||corner==3?box.y+radius:box.y+box.h-radius;vertices[i*2]={{cx+float(std::cos(angle)*(radius+2)),cy+float(std::sin(angle)*(radius+2))},color,{0,0}};vertices[i*2+1]={{cx+float(std::cos(angle)*radius),cy+float(std::sin(angle)*radius)},color,{0,0}};int n=(i+1)%count;int mesh[]={i*2,n*2,i*2+1,i*2+1,n*2,n*2+1};std::copy_n(mesh,6,indices+i*6);}SDL_RenderGeometry(r_,nullptr,vertices,count*2,indices,count*6);}
     void rect(int x, int y, int w, int h, Color color) {
         SDL_SetRenderDrawColor(r_, color.r, color.g, color.b, color.a);
         SDL_Rect a{renderX(x), y, renderX(x + w) - renderX(x), h};
-        bool panel = w>35 && h>35 &&
-            ((color.r==PANEL.r && color.g==PANEL.g && color.b==PANEL.b) ||
-             (color.r==FOCUS.r && color.g==FOCUS.g && color.b==FOCUS.b));
-        if(panel) {
-            // Flat rounded panels avoid full-panel alpha blends on the CPU renderer.
+        bool panel = (w>35 && h>35 && (color.r==PANEL.r && color.g==PANEL.g && color.b==PANEL.b || color.r==FOCUS.r && color.g==FOCUS.g && color.b==FOCUS.b));
+        if(panel&&ModernLook) {
+            // Shared translucent surfaces retain opaque text and a subtle glass rim.
+            if(a.w>250&&a.h>120)fillRounded({a.x,a.y+4,a.w,a.h},{0,0,0,24},14);
             fillRounded(a,color,12);
+            if(a.w>250&&a.h>120){SDL_SetRenderDrawColor(r_,LINE.r,LINE.g,LINE.b,100);SDL_Rect edge{a.x+12,a.y,a.w-24,1};SDL_RenderFillRect(r_,&edge);}
         } else SDL_RenderFillRect(r_, &a);
+        if(focusColour(color)&&w>35&&h>30)focusStroke(a,ModernLook?12:2);
         if (recording_)
             record({0, a.x, a.y, a.w, a.h, color.r, color.g, color.b, color.a});
     }
     void roundedRect(int x,int y,int w,int h,Color color,int radius=12){
-        SDL_Rect box{renderX(x),y,renderX(x+w)-renderX(x),h};fillRounded(box,color,radius);
+        SDL_Rect box{renderX(x),y,renderX(x+w)-renderX(x),h};fillRounded(box,color,ModernLook?radius:2);if(focusColour(color))focusStroke(box,ModernLook?radius:2);
         if(recording_)record({0,box.x,box.y,box.w,box.h,color.r,color.g,color.b,color.a});
     }
     int textWidth(const std::string &value, int size) {
@@ -349,6 +387,7 @@ class UI {
                 return;
             it = labels_.emplace(key, label).first;
         }
+        it->second.touched=labelFrame_;
         SDL_Rect dst{x, y, fontUnits(it->second.w), fontUnits(it->second.h)};
         SDL_RenderCopy(r_, it->second.texture, nullptr, &dst);
         nlohmann::json clip = nullptr;
@@ -388,21 +427,101 @@ class UI {
         text(x - offset, y, value, size, color);
         SDL_RenderSetClipRect(r_, clipped ? &previous : nullptr);
     }
+    void setAnimatedBackground(bool enabled){setBackgroundAnimation(enabled?1:0);}
+    void setBackgroundAnimation(int style){backgroundAnimation_=std::clamp(style,0,3);animatedBackground_=backgroundAnimation_!=0;}
+    void setBackgroundSpeed(int percent){backgroundSpeed_=std::clamp(percent,25,200)/100.f;}
+    void ambientBackground(){
+        Uint64 now=SDL_GetTicks64();if(backgroundTick_)backgroundTime_+=(now-backgroundTick_)/1000.*backgroundSpeed_;backgroundTick_=now;
+        if(!animatedBackground_||(!BG.r&&!BG.g&&!BG.b))return;
+        if(!ambientGlow_){
+            auto *surface=SDL_CreateRGBSurfaceWithFormat(0,512,512,32,SDL_PIXELFORMAT_RGBA32);
+            if(!surface)return;
+            for(int y=0;y<512;y++){auto *pixels=(Uint32*)((Uint8*)surface->pixels+y*surface->pitch);for(int x=0;x<512;x++){
+                float dx=(x-255.5f)/255.5f,dy=(y-255.5f)/255.5f;float falloff=std::max(0.f,1-dx*dx-dy*dy);
+                pixels[x]=SDL_MapRGBA(surface->format,255,255,255,Uint8(110*falloff*falloff*falloff));
+            }}
+            ambientGlow_=SDL_CreateTextureFromSurface(r_,surface);SDL_FreeSurface(surface);if(!ambientGlow_)return;SDL_SetTextureBlendMode(ambientGlow_,SDL_BLENDMODE_BLEND);
+        }
+        const double t=backgroundTime_;
+        const float width=layout_.width(),height=layout_.height();
+        if(backgroundAnimation_==1){
+            SDL_SetTextureColorMod(ambientGlow_,PRIMARY.r,PRIMARY.g,PRIMARY.b);SDL_SetTextureAlphaMod(ambientGlow_,BG.r>200?110:190);
+            for(int i=0;i<2;i++){double phase=t*.20+i*2.4;SDL_FRect dst{float(width*(.05+i*.48)+std::sin(phase)*width*.24-width*.45),float(height*(.2+i*.4)+std::cos(phase*.73)*height*.22-height*.6),width*1.1f,height*1.4f};SDL_RenderCopyF(r_,ambientGlow_,nullptr,&dst);}return;
+        }
+        // Small vertex meshes deform every frame; the GPU interpolates their colour and alpha.
+        constexpr int columns=64,rows=9;
+        // Keep the animated mesh off the Switch UI thread stack.
+        ambientVertices_.resize((columns+1)*rows);ambientIndices_.resize(columns*(rows-1)*6);
+        auto &vertices=ambientVertices_;auto &indices=ambientIndices_;
+        for(int band=0;band<3;band++){
+            for(int x=0;x<=columns;x++){float u=float(x)/columns;double phase=u*6.2831853;
+                float centre=height*(.18f+band*.30f+float(std::sin(phase*(backgroundAnimation_==2?1.2:.7)+t*.38+band*1.8))*.16f+float(std::sin(phase*2.1-t*.27+band))*.06f);
+                float breadth=height*(backgroundAnimation_==2?.24f:.46f)*(1.f+.22f*float(std::sin(phase+t*.3+band)));
+                for(int y=0;y<rows;y++){float v=float(y)/(rows-1),edge=std::sin(v*3.14159265f);SDL_Color color{PRIMARY.r,PRIMARY.g,PRIMARY.b,255};color.a=Uint8(edge*edge*(BG.r>200?20:38));vertices[x*rows+y]={{u*width,centre+(v-.5f)*breadth},color,{0,0}};}
+            }
+            int n=0;for(int x=0;x<columns;x++)for(int y=0;y<rows-1;y++){int a=x*rows+y,b=a+rows;indices[n++]=a;indices[n++]=b;indices[n++]=a+1;indices[n++]=a+1;indices[n++]=b;indices[n++]=b+1;}
+            SDL_RenderGeometry(r_,nullptr,vertices.data(),(columns+1)*rows,indices.data(),n);
+        }
+    }
+
+    void paintBackground(){
+        if(backdrop_)SDL_RenderCopy(r_,backdrop_,nullptr,nullptr);
+        else{SDL_SetRenderDrawColor(r_,BG.r,BG.g,BG.b,255);SDL_RenderClear(r_);}
+        ambientBackground();
+    }
+    // Stock bars for screen-control clients, with no local raster work.
+    void recordOnlyRect(int x,int y,int w,int h,Color c){
+        if(recording_)record({0,renderX(x),y,renderX(x+w)-renderX(x),h,c.r,c.g,c.b,c.a});
+    }
     void begin() {
+        // Always discard the previous frame, even if an earlier view left a clip.
+        // The PS5 software renderer must not retain glyph pixels between selections.
         SDL_RenderSetClipRect(r_, nullptr);
+        SDL_SetRenderDrawColor(r_, BG.r, BG.g, BG.b, 255);
+        SDL_RenderClear(r_);
+        SDL_SetRenderDrawBlendMode(r_,SDL_BLENDMODE_BLEND);
         screenOps_ = nlohmann::json::array();
         screenCover_.clear();
         if (recording_)
             record({0, 0, 0, layout_.width(), layout_.height(), BG.r, BG.g, BG.b, 255});
-        if (labels_.size() > 600)
-            clear();
-        SDL_SetRenderDrawColor(r_, BG.r, BG.g, BG.b, 255);
-        SDL_RenderClear(r_);
+        ++labelFrame_;
+        for(int budget=0;labels_.size()>600&&budget<8;++budget){
+            auto oldest=std::min_element(labels_.begin(),labels_.end(),[](const auto &a,const auto &b){return a.second.touched<b.second.touched;});
+            if(oldest==labels_.end()||oldest->second.touched+2>=labelFrame_)break;
+            SDL_DestroyTexture(oldest->second.texture);labels_.erase(oldest);
+        }
+        // Keep auxiliary caches bounded without a bulk reset of visible textures.
+        if(badgeLabels_.size()>256){auto cold=std::min_element(badgeLabels_.begin(),badgeLabels_.end(),[](const auto &a,const auto &b){return a.second.touched<b.second.touched;});if(cold!=badgeLabels_.end()&&cold->second.touched+2<labelFrame_){SDL_DestroyTexture(cold->second.texture);badgeLabels_.erase(cold);}}
+        if(icons_.size()>128){auto cold=std::min_element(icons_.begin(),icons_.end(),[](const auto &a,const auto &b){return a.second.touched<b.second.touched;});if(cold!=icons_.end()&&cold->second.touched+2<labelFrame_){SDL_DestroyTexture(cold->second.texture);icons_.erase(cold);}}
+        uint64_t key=uint64_t(BG.r)|(uint64_t(BG.g)<<8)|(uint64_t(BG.b)<<16)|
+                     (uint64_t(PRIMARY.r)<<24)|(uint64_t(PRIMARY.g)<<32)|(uint64_t(PRIMARY.b)<<40);
+        int outputW=0,outputH=0;SDL_GetRendererOutputSize(r_,&outputW,&outputH);
+        if(!backdrop_||key!=backdropKey_||outputW!=backdropWidth_||outputH!=backdropHeight_){
+            // Keep the old texture valid until its replacement is ready.
+            // Generate directly at output resolution: no enlarged artwork tiles or
+            // low-resolution colour steps. Cached until theme/output changes.
+            auto *surface=SDL_CreateRGBSurfaceWithFormat(0,outputW,outputH,32,SDL_PIXELFORMAT_RGBA32);
+            if(surface){
+                for(int y=0;y<outputH;y++){
+                    double fy=double(y)/std::max(1,outputH-1);
+                    auto *pixels=(Uint32*)((Uint8*)surface->pixels+y*surface->pitch);
+                    for(int x=0;x<outputW;x++){
+                        double fx=double(x)/std::max(1,outputW-1);
+                        double glow=(BG.r||BG.g||BG.b)? .12*fx*(1.-fy)* (1.-fy):0.;
+                        auto channel=[&](int base,int accent){return Uint8(std::clamp(int(base+accent*glow+.5),0,255));};
+                        pixels[x]=SDL_MapRGBA(surface->format,channel(BG.r,PRIMARY.r),channel(BG.g,PRIMARY.g),channel(BG.b,PRIMARY.b),255);
+                    }
+                }
+                auto *replacement=SDL_CreateTextureFromSurface(r_,surface);SDL_FreeSurface(surface);
+                if(replacement){SDL_SetTextureBlendMode(replacement,SDL_BLENDMODE_NONE);SDL_DestroyTexture(backdrop_);backdrop_=replacement;backdropKey_=key;backdropWidth_=outputW;backdropHeight_=outputH;}
+            }
+        }
+        if(backdrop_)SDL_RenderCopy(r_,backdrop_,nullptr,nullptr);
+        else {SDL_SetRenderDrawColor(r_,BG.r,BG.g,BG.b,255);SDL_RenderClear(r_);}
+        ambientBackground();
     }
     void button(int x, int y, int w, int h, const std::string &label, bool focus = false) {
-        rect(x, y, w, h, focus ? FOCUS : PANEL);
-        if (focus)
-            rect(x, y, 4, h, ACCENT);
+        roundedRect(x,y,w,h,focus?FOCUS:PANEL,8);
         text(x + 14, y + (h - 22) / 2 - 2, label, 20, focus ? ACCENT : TEXT, w - 24);
     }
     void rightText(int right,int y,const std::string &value,int size,Color color){
@@ -420,11 +539,12 @@ class UI {
         if(textWidth(value,size)<=w)centeredText(x,y,w,size+18,value,size,color);
         else marquee(x,y,value,size,color,w,key);
     }
+    void centeredHints(int y,const std::vector<std::pair<std::string,std::string>> &hints,int left=0,int width=1280){int total=0;for(auto &h:hints)total+=43+textWidth(h.second,13);int x=left+std::max(0,(width-total+18)/2);for(auto &h:hints)x=padHint(x,y,h.first,h.second);}
     int padHint(int x,int y,const std::string &button,const std::string &label){
-        int id=button=="Dpad"?24:button=="+"?25:button=="-"?26:
-               (button=="A"||button=="B"||button=="X"||button=="Y"||button=="R3"||button=="L3")?27:28;
-        transportIcon(x+12,y+12,24,id,false,TEXT,false);
-        if(id==27||id==28)centeredText(x,y+2,24,20,button=="R3"?"R":button=="L3"?"L":button,id==28?8:12,TEXT);
+        int id=button=="A"?20:button=="B"?21:button=="X"?22:button=="Y"?23:button=="Plus"?25:button=="Minus"?26:button=="Cross"?20:button=="Circle"?21:button=="Triangle"?22:button=="Square"?23:button=="Dpad"?24:button=="Options"?25:button=="Touchpad"?26:(button=="R3"||button=="L3")?27:28;
+        bool face=button=="A"||button=="B"||button=="X"||button=="Y";if(face||button=="Plus"||button=="Minus")id=27;
+        int size=24;transportIcon(x+12,y+12,size,id,false,TEXT,false);
+        if(id==27||id==28)centeredText(x,y+2,24,20,button=="Plus"?"+":button=="Minus"?"-":button,face?13:8,TEXT);
         text(x+25,y+2,label,13,MUTED);
         return x+25+textWidth(label,13)+18;
     }
@@ -451,16 +571,24 @@ class UI {
         }
         // Centre the visible glyphs inside the actual rendered box, not font advance
         // width in design units. Font side bearings and conversion rounding no longer bias it.
+        found->second.touched=labelFrame_;
         auto &item=found->second;int bx=renderX(x),bw=renderX(x+w)-bx;
-        // Fonts are already rasterised at output scale. Keep glyph pixels 1:1,
-        // instead of enlarging a ceil-rounded logical width on the 1080p layout.
-        const float scale=float(fontScale());
-        const float tw=item.inkWidth/scale,th=item.height/scale;
+        int tw=fontUnits(item.inkWidth),th=fontUnits(item.height);
         SDL_Rect source{item.left,0,item.inkWidth,item.height};
-        SDL_FRect dest{std::round((bx+(bw-tw)*.5f)*scale)/scale,
-                       std::round((y+(h-th)*.5f)*scale)/scale,tw,th};
+        SDL_FRect dest{bx+(bw-tw)*.5f,float(y+(h-th)/2),float(tw),float(th)};
         SDL_RenderCopyF(r_,item.texture,&source,&dest);
         if(recording_)record({1,int(std::lround(dest.x))-fontUnits(item.left),int(dest.y),label,size,TEXT.r,TEXT.g,TEXT.b,TEXT.a,0,nullptr});
+    }
+    // Batched raster line for local visualizers; screen clients receive stock bars.
+    void visualizerLine(int x0,int y0,int x1,int y1,Color c){
+        float ax=renderX(x0),bx=renderX(x1),ay=y0,by=y1;
+        float dx=bx-ax,dy=by-ay,length=std::sqrt(dx*dx+dy*dy);
+        if(length<.01f){rect(x0,y0,1,1,c);return;}
+        // A narrow quad stays continuous with SDL's fractional output scaling.
+        float nx=-dy/length*.7f,ny=dx/length*.7f;SDL_Color color{c.r,c.g,c.b,c.a};
+        SDL_Vertex vertices[]={{{ax+nx,ay+ny},color,{0,0}},{{bx+nx,by+ny},color,{0,0}},
+                               {{bx-nx,by-ny},color,{0,0}},{{ax-nx,ay-ny},color,{0,0}}};
+        int indices[]={0,1,2,0,2,3};SDL_RenderGeometry(r_,nullptr,vertices,4,indices,6);
     }
     void line(int x0, int y0, int x1, int y1, int thick, Color c) {
         x0 = renderX(x0);
@@ -500,9 +628,11 @@ class UI {
             for(int y=0;y<size;y++){int first=-1;for(int x=0;x<=size;x++){bool hit=x<size&&shape.hit((x+.5f)/size,(y+.5f)/size);if(hit&&first<0)first=x;if(!hit&&first>=0){item.runs.push_back({first,y,x-first});first=-1;}}}
             found=icons_.emplace(key,std::move(item)).first;
         }
+        found->second.touched=labelFrame_;
         SDL_Rect dst{renderX(cx)-size/2,cy-size/2,size,size};SDL_RenderCopy(r_,found->second.texture,nullptr,&dst);
         if(recording_)for(auto &run:found->second.runs)record({0,dst.x+run[0],dst.y+run[1],run[2],1,color.r,color.g,color.b,color.a});
     }
+    SDL_Texture *coverPrepared(SDL_Surface *surface,const std::vector<unsigned char> &encoded,std::vector<unsigned char> *remoteBytes=nullptr){if(remoteBytes)*remoteBytes=encoded;if(!surface)return nullptr;auto *texture=SDL_CreateTextureFromSurface(r_,surface);if(texture){screenImages_[texture]=encoded;imageBirth_[texture]=SDL_GetTicks64();}return texture;}
     SDL_Texture *cover(const std::vector<unsigned char> &bytes,
                        std::vector<unsigned char> *remoteBytes = nullptr) {
         if (remoteBytes)
@@ -523,12 +653,24 @@ class UI {
         playbackTrace("artwork.texture.end", bool(texture));
         SDL_FreeSurface(surface);
         if (texture) {
-            screenImages_[texture] = std::move(encoded);
+            screenImages_[texture] = std::move(encoded);imageBirth_[texture]=SDL_GetTicks64();
         }
         return texture;
     }
     std::vector<unsigned char> remoteSurface(SDL_Surface *surface) {
         return remoteCoverJpeg(surface);
+    }
+    // Fit artwork beside the metadata column without stretching, cropping or a square mat.
+    void imageWithin(SDL_Texture *t,int x,int top,int width,int height){
+        int left=renderX(x),available=renderX(x+width)-left;
+        int w=1,h=1;if(t)SDL_QueryTexture(t,nullptr,nullptr,&w,&h);
+        float scale=std::min(float(available)/std::max(1,w),float(height)/std::max(1,h));
+        SDL_Rect dst{left,top+(height-int(h*scale))/2,std::max(1,int(w*scale)),std::max(1,int(h*scale))};
+        if(t){
+            auto born=imageBirth_.find(t);Uint8 alpha=born==imageBirth_.end()?255:Uint8(std::min<Uint64>(255,(SDL_GetTicks64()-born->second)*255/180));
+            SDL_SetTextureAlphaMod(t,alpha);SDL_RenderCopy(r_,t,nullptr,&dst);SDL_SetTextureAlphaMod(t,255);
+            if(recording_){auto found=screenImages_.find(t);if(found!=screenImages_.end()){screenCover_=found->second;record({2,dst.x,dst.y,dst.w,dst.h});}}
+        }else{NativeCoordinates coordinates(nativeCoordinates_);rect(dst.x,dst.y,dst.w,dst.h,PANEL);for(int i=0;i<5;i++)rect(dst.x+dst.w/4+i*dst.w/10,dst.y+dst.h/2-(i%3+1)*dst.h/20,dst.w/18,(i%3+1)*dst.h/10,LINE);}
     }
     void image(SDL_Texture *t, int x, int y, int size) {
         x = renderX(x);
@@ -541,7 +683,8 @@ class UI {
             float scale = float(size) / std::max(w, h);
             SDL_Rect dst{x + (size - int(w * scale)) / 2, y + (size - int(h * scale)) / 2,
                          int(w * scale), int(h * scale)};
-            SDL_RenderCopy(r_, t, nullptr, &dst);
+            auto born=imageBirth_.find(t);Uint8 alpha=born==imageBirth_.end()?255:Uint8(std::min<Uint64>(255,(SDL_GetTicks64()-born->second)*255/180));
+            SDL_SetTextureAlphaMod(t,alpha);SDL_RenderCopy(r_, t, nullptr, &dst);SDL_SetTextureAlphaMod(t,255);
             if (recording_) {
                 auto i = screenImages_.find(t);
                 if (i != screenImages_.end()) {

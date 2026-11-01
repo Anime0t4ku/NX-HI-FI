@@ -545,3 +545,4 @@ bool CSWITCH_USB::check_is_optical(){
     
     return false;
 }
+bool CSWITCH_USB::stillConnected(){std::lock_guard<std::mutex> lock(usb_mutex);if(!device_found)return false;UsbHsInterface interfaces[16]{};s32 count=0;if(R_FAILED(usbHsQueryAcquiredInterfaces(interfaces,sizeof interfaces,&count)))return false;for(int i=0;i<count&&i<16;i++)if(interfaces[i].inf.ID==usbHsIfGetID(&inf_session))return true;return false;}

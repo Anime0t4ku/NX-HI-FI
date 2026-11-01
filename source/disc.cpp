@@ -57,6 +57,7 @@ std::shared_ptr<Drive> getDrive(bool refresh=false) {
     std::lock_guard<std::mutex> lock(deviceMutex);
     // Never invalidate a live input. Recreate between scans to handle unplug/replug.
     if(refresh&&drive&&drive.use_count()==1)drive.reset();
+    if(drive&&drive->usb&&drive.use_count()==1&&!drive->usb->stillConnected())drive.reset();
     if(!drive)drive=std::make_shared<Drive>();
     return drive;
 }
@@ -106,6 +107,28 @@ bool pathTrack(const std::string &path,std::string &id,int &number) {
     number=(name[5]-'0')*10+name[6]-'0';return number>=1&&number<=99;
 }
 } // namespace
+bool usbOpticalDriveDetected(){
+#ifdef __SWITCH__
+ auto d=getDrive();return d&&d->scsi;
+#else
+ return false;
+#endif
+}
+std::string currentDiscID(){
+#ifdef __SWITCH__
+ auto d=getDrive();DiscTOC toc;std::string error;return d&&d->toc(toc,error)?discID(toc):"";
+#else
+ return {};
+#endif
+}
+bool ejectDisc(std::string &error){
+#ifdef __SWITCH__
+ auto d=getDrive();if(d&&d->scsi){std::lock_guard<std::mutex> lock(d->io);if(d->scsi->UsbDvd_Eject(0)==0)return true;}error="Could not eject disc.";
+#else
+ error="USB optical drives require a Nintendo Switch build.";
+#endif
+ return false;
+}
 bool listDisc(std::vector<Entry> &out,std::string &error) {
     out.clear();
 #ifdef __SWITCH__

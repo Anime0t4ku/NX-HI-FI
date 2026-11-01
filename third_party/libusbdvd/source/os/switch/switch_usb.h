@@ -21,6 +21,7 @@ public:
     int usb_clear_halt(UsbHsClientIfSession *usb_if_session,UsbHsClientEpSession *usb_ep_session);
     
     void ResetEndpoints();
+    bool stillConnected();
 
     bool device_found = false;  
     uint8_t selsubclass = 0;

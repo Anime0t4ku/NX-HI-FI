@@ -28,9 +28,13 @@ inline PlayerIconShape playerIconShape(int id,bool playing,bool one){
     else if(id==8||id==9){s.path({{.17,.41},{.30,.41},{.47,.26},{.47,.74},{.30,.59},{.17,.59},{.17,.41}});s.line(.62,.50,.85,.50);if(id==9)s.line(.735,.38,.735,.62);}
     else if(id==10){for(int i=0;i<3;i++){float x=.26+i*.24f,y=i==1?.35f:.62f;s.line(x,.20,x,.80,.055);s.line(x-.075f,y,x+.075f,y,.11);}}
     else if(id==11){for(int x:{-1,1})for(int y:{-1,1}){float cx=.5+x*.29f,cy=.5+y*.29f;s.path({{cx-x*.17f,cy},{cx,cy},{cx,cy-y*.17f}},.065);}}
+    else if(id==20){s.line(.28,.28,.72,.72);s.line(.72,.28,.28,.72);}
+    else if(id==21)s.circle(.5,.5,.29);
+    else if(id==22)s.path({{.5,.18},{.81,.75},{.19,.75},{.5,.18}});
+    else if(id==23)s.box(.24,.24,.52,.52);
     else if(id==24){s.path({{.40,.14},{.60,.14},{.60,.40},{.86,.40},{.86,.60},{.60,.60},{.60,.86},{.40,.86},{.40,.60},{.14,.60},{.14,.40},{.40,.40},{.40,.14}},.045);}
-    else if(id==25){s.line(.22,.50,.78,.50,.09);s.line(.50,.22,.50,.78,.09);}
-    else if(id==26)s.line(.22,.50,.78,.50,.09);
+    else if(id==25){for(float y:{.28f,.50f,.72f})s.line(.27,y,.73,y,.065);}
+    else if(id==26){s.box(.12,.25,.76,.50,.045);for(int x=0;x<4;x++)for(int y=0;y<2;y++)s.circle(.29+x*.14f,.43+y*.14f,.012,.02);}
     else if(id==27)s.circle(.5,.5,.40,.045);
     else s.box(.08,.22,.84,.56,.045);
     return s;

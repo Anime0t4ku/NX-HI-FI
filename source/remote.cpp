@@ -1,11 +1,12 @@
 #include "playback_diagnostics.hpp"
 #include "remote.hpp"
+#include "storage_devices.hpp"
 #include "disc.hpp"
 #include "socket_write.hpp"
 #include "websocket.hpp"
 #include <sys/select.h>
 #include "web_ui.hpp"
-#include "screen_ui.hpp"
+
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstring>
@@ -104,11 +105,15 @@ RemoteServer::~RemoteServer() {
             s->thread.join();
 }
 void RemoteServer::publish(Json state, const Settings &s, uint64_t revision) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    state_ = std::move(state);
-    settings_ = s;
-    sourcesRevision_ = revision;
-    ++sequence_;
+    bool structural=state.contains("settings");
+    auto next=std::make_shared<const Json>(std::move(state));
+    std::shared_ptr<const Json> retiredBase,retiredLive;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if(structural){retiredBase=std::move(state_);state_=next;settings_=s;sourcesRevision_=revision;}
+        retiredLive.swap(live_);live_=std::move(next);
+        ++sequence_;
+    }
     condition_.notify_all();
 }
 void RemoteServer::artwork(std::vector<unsigned char> bytes) {
@@ -117,17 +122,6 @@ void RemoteServer::artwork(std::vector<unsigned char> bytes) {
     ++coverRevision_;
     ++sequence_;
     condition_.notify_all();
-}
-void RemoteServer::screenFrame(Json frame, std::vector<unsigned char> cover) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (cover != screenCover_) {
-        screenCover_ = std::move(cover);
-        ++screenCoverRevision_;
-    }
-    screen_ = std::move(frame);
-    screen_["cover_revision"] = screenCoverRevision_;
-    screen_["has_artwork"] = !screenCover_.empty();
-    ++sequence_;
 }
 void RemoteServer::acceptLoop() {
     while (!quit_) {
@@ -191,7 +185,7 @@ RemoteServer::Json RemoteServer::libraryRequest(const Json &j, bool test) {
         j["sources_revision"].get<uint64_t>() != revision)
         return failure("Sources changed; refresh and try again.");
     int index = j.value("source", -1);
-    if (index < (test ? -1 : -2) || index >= int(settings.shares.size()))
+    if ((test && index < -1) || index >= int(settings.shares.size()))
         return failure("Source no longer exists.");
     Source source{false, {}, settings.musicRoot};
     std::string error, path = j.value("path", std::string{});
@@ -203,9 +197,9 @@ RemoteServer::Json RemoteServer::libraryRequest(const Json &j, bool test) {
             return failure(error);
         source = {true, share, share.folder};
         path = "";
-    } else if (index == -2)
-        source = {false, {}, DiscRoot};
-    else if (index >= 0)
+    } else if (index < 0) {
+        if(!resolveStorageSource(settings,index,source))return failure("Storage drive is no longer available.");
+    } else if (index >= 0)
         source = {true, settings.shares[index], settings.shares[index].folder};
     std::vector<Entry> entries;
     if (!listDirectory(source, path, entries, error))
@@ -228,6 +222,7 @@ RemoteServer::Json RemoteServer::libraryRequest(const Json &j, bool test) {
             {"sources_revision", revision}};
 }
 bool RemoteServer::serve(int fd) {
+    lastAccess_=std::chrono::steady_clock::now().time_since_epoch()/std::chrono::milliseconds(1);
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(6);
     std::string request;
     char buffer[4096];
@@ -279,7 +274,7 @@ bool RemoteServer::serve(int fd) {
         jsonResponse(fd, failure("Cross-site requests are not accepted."), 403);
         return false;
     }
-    if (method == "GET" && (path == "/ws" || path == "/ws?screen=1")) {
+    if (method == "GET" && (path == "/ws" || path == "/ws?delta=1")) {
         if (lower(headers["upgrade"]) != "websocket" ||
             lower(headers["connection"]).find("upgrade") == std::string::npos ||
             headers["sec-websocket-version"] != "13" || headers["sec-websocket-key"].size() != 24) {
@@ -287,7 +282,7 @@ bool RemoteServer::serve(int fd) {
             return false;
         }
         return startStream(fd, headers["sec-websocket-key"],
-                           path.find("screen=1") != std::string::npos);
+                           path.find("delta=1") != std::string::npos);
     }
     if (method == "GET" && (path == "/" || path == "/index.html")) {
         response(fd, 200, "text/html; charset=utf-8", WebUI, sizeof(WebUI) - 1,
@@ -296,20 +291,17 @@ bool RemoteServer::serve(int fd) {
                  "frame-ancestors 'none'\r\n");
         return false;
     }
-    if (method == "GET" && path == "/screen") {
-        response(
-            fd, 200, "text/html; charset=utf-8", ScreenUI, sizeof(ScreenUI) - 1,
-            "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; style-src "
-            "'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'\r\n");
-        return false;
-    }
     if (method == "GET" && path == "/api/info") {
         jsonResponse(fd, {{"app", "NX Hi-Fi"},
-                          {"name", "NX Hi-Fi"},
-                          {"identity",remoteIdentity()},{"app_id","nx-hifi"},{"protocol_version",1},
+                          {"identity",remoteIdentity()}, {"app_id","nx-hifi"}, {"protocol_version",1},
+                          {"name", "NX Hi-Fi"}, {"platform", "ps5"}, {"outgoing_remote", false},
                           {"version", Version},
                           {"port", 8182},
-                          {"screen_control", true}});
+                          {"screen_control", false}});
+        return false;
+    }
+    if (path == "/api/discovery" || path == "/api/probe") {
+        jsonResponse(fd, failure("NX Hi-Fi accepts remote control but does not control other devices."), 403);
         return false;
     }
     if (method == "GET" && path == "/api/discovery") {
@@ -327,29 +319,14 @@ bool RemoteServer::serve(int fd) {
                           {"clients", rows}});
         return false;
     }
-    if (method == "GET" && path.rfind("/api/screen/art", 0) == 0) {
-        std::vector<unsigned char> bytes;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            bytes = screenCover_;
-        }
-        if (bytes.empty())
-            jsonResponse(fd, failure("No screen artwork."), 404);
-        else
-            response(fd, 200, "image/jpeg", bytes.data(), bytes.size());
-        return false;
-    }
     if (method == "GET" && path == "/api/state") {
-        Json state;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            state = state_;
-            state["cover_revision"] = coverRevision_;
-            state["has_artwork"] = !cover_.empty();
-        }
+        std::shared_ptr<const Json> base,live;uint64_t coverRevision;bool hasCover;
+        {std::lock_guard<std::mutex> lock(mutex_);base=state_;live=live_;coverRevision=coverRevision_;hasCover=!cover_.empty();}
+        Json state=*base;state.update(*live);state["cover_revision"]=coverRevision;state["has_artwork"]=hasCover;
         jsonResponse(fd, state);
         return false;
     }
+    if(method=="GET"&&path.rfind("/api/album-art/",0)==0){auto id=path.substr(15);auto query=id.find('?');if(query!=id.npos)id.resize(query);std::function<std::vector<unsigned char>(const std::string&)> provider;{std::lock_guard<std::mutex> l(mutex_);provider=albumArt_;}auto bytes=provider?provider(id):std::vector<unsigned char>{};if(bytes.empty())jsonResponse(fd,failure("No album artwork."),404);else response(fd,200,"image/jpeg",bytes.data(),bytes.size());return false;}
     if (method == "GET" && path.substr(0, 8) == "/api/art") {
         std::vector<unsigned char> cover;
         uint64_t revision;
@@ -387,7 +364,7 @@ bool RemoteServer::serve(int fd) {
         return false;
     }
     size_t length = std::stoul(count);
-    if (length > 262144) {
+    if (length > (path=="/api/cmd"?3000000u:262144u)) {
         jsonResponse(fd, failure("Request too large."), 413);
         return false;
     }
@@ -469,7 +446,7 @@ bool RemoteServer::serve(int fd) {
     return false;
 }
 
-bool RemoteServer::startStream(int fd, const std::string &key, bool screen) {
+bool RemoteServer::startStream(int fd, const std::string &key, bool delta) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = streams_.begin(); it != streams_.end();) {
         if ((*it)->done) {
@@ -489,8 +466,9 @@ bool RemoteServer::startStream(int fd, const std::string &key, bool screen) {
         return false;
     auto stream = std::make_unique<Stream>();
     stream->fd = fd;
-    stream->screen = screen;
+    stream->delta = delta;
     auto raw = stream.get();
+    ++liveClients_;
     stream->thread = std::thread(&RemoteServer::streamLoop, this, raw);
     streams_.push_back(std::move(stream));
     return true;
@@ -499,23 +477,23 @@ void RemoteServer::streamLoop(Stream *stream) {
     auto fd = stream->fd;
     uint64_t seen = ~uint64_t(0);
     std::string previousTrack;
+    std::shared_ptr<const Json> previousBase;
     auto last = std::chrono::steady_clock::now();
     while (!quit_) {
         Json state;
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (seen != sequence_) {
-                seen = sequence_;
-                state = state_;
-                state["cover_revision"] = coverRevision_;
-                state["has_artwork"] = !cover_.empty();
-                if (stream->screen)
-                    state["screen"] = screen_;
-            }
+        std::shared_ptr<const Json> base,live;uint64_t coverRevision=0;bool hasCover=false;
+        {std::lock_guard<std::mutex> lock(mutex_);
+            if(seen!=sequence_){seen=sequence_;base=state_;live=live_;coverRevision=coverRevision_;hasCover=!cover_.empty();}
+        }
+        if(base){
+            if(stream->delta&&previousBase==base){state={{"update",*live}};state["update"]["cover_revision"]=coverRevision;state["update"]["has_artwork"]=hasCover;}
+            else{state=*base;state.update(*live);state["cover_revision"]=coverRevision;state["has_artwork"]=hasCover;}
+            previousBase=std::move(base);
         }
         if (!state.is_null()) {
+            const auto &trackState=state.contains("update")?state["update"]:state;
             std::string track =
-                state.value("playback", Json::object()).value("track_key", std::string{});
+                trackState.value("playback", Json::object()).value("track_key", std::string{});
             bool changed = track != previousTrack;
             if (changed)
                 playbackTrace("websocket.track-state.encode.begin");
@@ -556,6 +534,7 @@ void RemoteServer::streamLoop(Stream *stream) {
         close(fd);
         stream->fd = -1;
     }
+    --liveClients_;
     stream->done = true;
 }
 } // namespace nxh

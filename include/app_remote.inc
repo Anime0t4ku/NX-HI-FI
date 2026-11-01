@@ -3,13 +3,9 @@ ClientScanner scanner;
 std::atomic<bool> probeCancel{false};
 std::future<ProbeResult> probeTask;
 RemoteClientConfig pendingClient;
-bool connectionOpen = false, scanOpen = false, canScreen = false;
+bool connectionOpen = false, scanOpen = false;
+int repeatFrames=0;
 int connectionStage = 0, connectionSelection = 0, scanSelection = 0;
-ScreenSessions screenSessions;
-nlohmann::json keyboardReplay;
-Uint64 lastScreenPublish = 0;
-bool screenPointerActive = false, screenPointerGesture = false;
-int screenPointerY = 0;
 void beginConnect(RemoteClientConfig config) {
     if (probeTask.valid() &&
         probeTask.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
@@ -32,34 +28,8 @@ void closeConnection() {
     connectionOpen = false;
     probeCancel = true;
 }
-void activateRemote(bool screen) {
-    connectionOpen = false;
-    disconnectTarget();
-    targetView = std::make_unique<RemoteView>(
-        ui, renderer, pendingClient,
-        [](const auto &label, auto &value, bool secret) { return keyboard(label, value, secret); },
-        settings.remoteClients, screen,settings);
-    cooldown = 15;
-}
-void connectionAction() {
-    if (connectionStage == 0) {
-        closeConnection();
-        return;
-    }
-    if (connectionStage == 1) {
-        if (connectionSelection == 0)
-            beginConnect(pendingClient);
-        else
-            closeConnection();
-        return;
-    }
-    if (connectionSelection == 0)
-        activateRemote(false);
-    else if (connectionSelection == 1 && canScreen)
-        activateRemote(true);
-    else if (connectionSelection == 2)
-        closeConnection();
-}
+void activateRemote(bool){connectionOpen=false;disconnectTarget();if(pendingClient.type=="mister")targetView=std::make_unique<RemoteView>(ui,renderer,pendingClient,[](const auto &label,auto &value,bool secret){return keyboard(label,value,secret);},settings.remoteClients,false,settings);else{try{beginNativeRemote(pendingClient);}catch(const std::exception &error){closeNativeRemote();status=std::string("Could not open remote: ")+error.what();}}cooldown=SDL_GetTicks64()+120;}
+void connectionAction(){if(connectionStage==1&&connectionSelection==0)beginConnect(pendingClient);else closeConnection();}
 void startScan() {
     scanOpen = true;
     scanSelection = 0;
@@ -104,13 +74,7 @@ void updateConnections() {
                 connectionSelection = 0;
             } else {
                 pendingClient = result.client;
-                canScreen = result.screen;
-                if (pendingClient.type == "mister")
-                    activateRemote(false);
-                else {
-                    connectionStage = 2;
-                    connectionSelection = 0;
-                }
+                activateRemote(false);
             }
         }
     }
@@ -131,17 +95,7 @@ void drawConnection() {
         ui.button(80, 360, 1120, 54, "Retry", connectionSelection == 0);
         ui.button(80, 430, 1120, 54, "Back", connectionSelection == 1);
     }
-    if (connectionStage == 2) {
-        ui.text(80, 235, "Choose remote mode", 28, TEXT);
-        ui.button(80, 310, 1120, 58, "Independent control", connectionSelection == 0);
-        ui.text(98, 375, "Browse and control music separately from the target's screen.", 19, MUTED,
-                1050);
-        ui.button(80, 420, 1120, 58,
-                  canScreen ? "Screen control" : "Screen control · unavailable",
-                  connectionSelection == 1);
-        ui.text(98, 485, "View and operate the target's interface.", 19, MUTED, 1050);
-        ui.button(80, 535, 1120, 54, "Cancel", connectionSelection == 2);
-    }
+
     ui.text(80, layout().bottom(665), "Up/Down Select   A Confirm   B Back", 17, MUTED, 1100);
     finishFrame();
 }
@@ -199,7 +153,7 @@ bool dialogInput(u64 down, u64 held, bool injected) {
         if (down & HidNpadButton_B)
             optionApply = nullptr;
     } else if (connectionOpen) {
-        int count = connectionStage == 0 ? 1 : connectionStage == 1 ? 2 : 3;
+        int count = connectionStage == 0 ? 1 : connectionStage == 1 ? 2 : 1;
         connectionSelection = (connectionSelection + delta + count) % count;
         if (down & HidNpadButton_A)
             connectionAction();
@@ -250,15 +204,7 @@ void dialogClick(int x, int y) {
                     connectionAction();
                     return;
                 }
-        if (connectionStage == 2) {
-            int ys[] = {310, 420, 535};
-            for (int i = 0; i < 3; ++i)
-                if (inside(x, y, 80, ys[i], 1120, 58)) {
-                    connectionSelection = i;
-                    connectionAction();
-                    return;
-                }
-        }
+    
     } else if (scanOpen) {
         int first = std::max(0, scanSelection - layout().rows() + 1), n = scanner.results().size();
         if (inside(x, y, 46, 198, 1180, layout().rows() * 44)) {
@@ -279,173 +225,13 @@ void dialogClick(int x, int y) {
         }
     }
 }
-u64 screenButtons(unsigned b) {
-    const u64 keys[] = {HidNpadButton_A,    HidNpadButton_B,     HidNpadButton_X,
-                        HidNpadButton_Y,    HidNpadButton_Minus, HidNpadButton_Plus,
-                        HidNpadButton_L,    HidNpadButton_R,     HidNpadButton_ZL,
-                        HidNpadButton_ZR,   HidNpadButton_Up,    HidNpadButton_Down,
-                        HidNpadButton_Left, HidNpadButton_Right, HidNpadButton_StickR,HidNpadButton_StickL};
-    u64 out = 0;
-    for (int i = 0; i < 16; ++i)
-        if (b & (1u << i))
-            out |= keys[i];
-    return out;
-}
-void dispatchScreenInput(const nlohmann::json &j) {
-    auto kind = j.value("kind", std::string("buttons"));
-    if (kind == "cancel") {
-        screenPointerActive = false;
-        scrubbing = false;
-        colourDrag = -1;
-        return;
-    }
-    bool wasSleeping = sleeping;
-    wake();
-    if (wasSleeping)
-        return;
-    if (kind == "buttons") {
-        unsigned b = j.value("buttons", 0u) & 65535;
-        PadState dummy{};
-        cooldown = 0;
-        input(dummy, screenButtons(b), screenButtons(b), true);
-        return;
-    }
-    if(listening){if(kind=="up")setListening(false);return;}
-    int w = j.value("w", 0), h = j.value("h", 0);
-    if (w != layout().width() || h != layout().height())
-        return;
-    int x = layout().designX(j.value("x", 0)), y = j.value("y", 0);
-    if (x < 0 || x > 1280 || y < 0 || y > layout().height())
-        return;
-    if (targetView && targetView->screenMode())
-        return;
-    if (targetView) {
-        if (kind == "down") {
-            screenPointerActive = targetView->beginScrub(x, y);
-            screenPointerY = y;
-        } else if (kind == "move" && screenPointerActive)
-            targetView->previewScrub(x);
-        else if (kind == "up") {
-            if (screenPointerActive)
-                targetView->drag(x);
-            else
-                targetView->click(x, y);
-            screenPointerActive = false;
-        }
-        return;
-    }
-    if (connectionOpen || scanOpen) {
-        if (kind == "up")
-            dialogClick(x, y);
-        return;
-    }
-    if (kind == "down") {
-        screenPointerActive = true;
-        screenPointerGesture = false;
-        screenPointerY = y;
-        if (beginColourDrag(x, y))
-            screenPointerGesture = true;
-        else if (beginScrub(x, y))
-            screenPointerGesture = true;
-    }
-    if (kind == "move" && screenPointerActive) {
-        if (colourDrag >= 0)
-            dragColour(x);
-        else if (scrubbing)
-            previewScrub(x);
-        else if (!fullscreen && !colourPicking && x < 856 && std::abs(y - screenPointerY) > 32) {
-            move(y < screenPointerY ? 1 : -1);
-            screenPointerY = y;
-            screenPointerGesture = true;
-        }
-    }
-    if (kind == "up" && screenPointerActive) {
-        if (colourDrag >= 0) {
-            dragColour(x);
-            colourDrag = -1;
-        } else if (scrubbing)
-            finishScrub(x);
-        else if (!screenPointerGesture)
-            click(x, y);
-        screenPointerActive = false;
-    }
-}
-nlohmann::json screenCommand(const nlohmann::json &j) {
-    using J = nlohmann::json;
-    auto fail = [](std::string e) { return J{{"ok", false}, {"error", e}}; };
-    auto op = j.value("op", std::string{});
-    auto now = SDL_GetTicks64();
-    if (op == "screen_open") {
-        if (targetView && targetView->screenMode())
-            return fail("This client is already controlling another screen.");
-        auto token = screenSessions.open(now);
-        if (token.empty())
-            return fail("Too many screen controllers.");
-        return {{"ok", true}, {"session", token}};
-    }
-    auto token = j.value("session", std::string{});
-    if (!screenSessions.touch(token, now))
-        return fail("Screen session expired. Reconnect to the client.");
-    if (op == "screen_close") {
-        screenSessions.close(token);
-        scrubbing = false;
-        colourDrag = -1;
-        screenPointerActive = false;
-        if (remoteKeyboard.owner == token)
-            remoteKeyboard.cancel();
-        return {{"ok", true}};
-    }
-    if (op == "screen_keepalive")
-        return {{"ok", true}};
-    if (op == "screen_text") {
-        if (!remoteKeyboard.pending || remoteKeyboard.owner != token ||
-            j.value("id", uint64_t(0)) != remoteKeyboard.id)
-            return fail("The text prompt is no longer open.");
-        auto text = j.value("value", std::string{});
-        if (text.size() > 1024 || text.find('\0') != std::string::npos)
-            return fail("Invalid text.");
-        bool accepted = j.value("accepted", false);
-        remoteKeyboard.pending = false;
-        if (accepted) {
-            if (keyboardReplay.value("kind", std::string{}) == "up") {
-                screenPointerActive = true;
-                screenPointerGesture = false;
-            }
-            remoteKeyboard.answer = text;
-            remoteKeyboard.accepted = true;
-            remoteKeyboard.answerReady = true;
-            remoteKeyboard.intercept = true;
-            dispatchScreenInput(keyboardReplay);
-            remoteKeyboard.intercept = false;
-            remoteKeyboard.answerReady = false;
-        }
-        return {{"ok", true}};
-    }
-    if (op != "screen_input")
-        return fail("Unknown screen command.");
-    remoteKeyboard.cancel();
-    remoteKeyboard.owner = token;
-    remoteKeyboard.intercept = true;
-    dispatchScreenInput(j);
-    remoteKeyboard.intercept = false;
-    if (remoteKeyboard.pending)
-        keyboardReplay = j;
-    return {{"ok", true}};
-}
 void finishFrame(bool present = true) {
-    auto now = SDL_GetTicks64();
-    if (remote && ui.recordingScreen() && screenSessions.active(now) &&
-        now - lastScreenPublish >= 50) {
-        lastScreenPublish = now;
-        auto frame = ui.screenFrame();
-        if (remoteKeyboard.pending)
-            frame["keyboard"] = {{"id", remoteKeyboard.id},
-                                 {"owner", remoteKeyboard.owner},
-                                 {"label", remoteKeyboard.label},
-                                 {"value", remoteKeyboard.initial},
-                                 {"secret", remoteKeyboard.secret}};
-        remote->screenFrame(std::move(frame), ui.screenCover());
-    }
-    if (present)
+    if (present) {
+        auto start=SDL_GetPerformanceCounter();
+        if(SDL_RenderFlush(renderer)!=0)frameDiagnostics.renderError=SDL_GetError();
+        auto flushed=SDL_GetPerformanceCounter();
         SDL_RenderPresent(renderer);
+        frameDiagnostics.flushTicks=flushed-start;
+        frameDiagnostics.presentTicks=SDL_GetPerformanceCounter()-flushed;
+    }
 }

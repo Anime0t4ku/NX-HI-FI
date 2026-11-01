@@ -249,7 +249,7 @@ inline void inspectOggDuration(Input &in, TrackDetails &m) {
             m.duration = double(samples) / m.sampleRate;
     }
 }
-inline TrackDetails readTrackDetails(Input &in, const std::string &path) {
+inline TrackDetails readTrackDetails(Input &in, const std::string &path,bool fast=false) {
     TrackDetails m;
     auto dot = path.find_last_of('.');
     auto ext = dot == std::string::npos ? "" : lower(path.substr(dot));
@@ -273,6 +273,12 @@ inline TrackDetails readTrackDetails(Input &in, const std::string &path) {
         size_t n = artBE(h + 6, 4, true);
         if (n > 32 * 1024 * 1024 || (version == 2 && (flags & 64)) || !in.seek(10, SEEK_SET))
             return m;
+        if(fast&&!(flags&128)&&!(flags&64)){
+            size_t pos=10,end=10+n,head=version==2?6:10;unsigned checked=0;
+            while(pos+head<=end&&checked++<512){unsigned char frame[10]{};if(!in.seek(pos,SEEK_SET)||!artRead(in,frame,head))break;size_t len=version==2?artBE(frame+3,3):artBE(frame+4,4,version==4);if(!len||len>end-pos-head)break;std::string id((char*)frame,version==2?3:4);bool unsupported=version==3?(frame[9]&224):version==4?(frame[9]&76):false;if(frame[0]=='T'&&!unsupported&&len<=65536){std::vector<unsigned char> value(len);if(!artRead(in,value.data(),len))break;if(version==4&&(frame[9]&2))value=deUnsync(value);size_t offset=version==4&&(frame[9]&1)?4:0;if(offset<value.size()&&value[offset]<=3)metaField(m,id,metaText(value.data()+offset+1,value.size()-offset-1,value[offset]));}pos+=head+len;
+            }
+            // Text tags are small. Binary pictures are loaded separately by the artwork worker.
+        }else{
         std::vector<unsigned char> b(n);
         if (!artRead(in, b.data(), n))
             return m;
@@ -302,6 +308,7 @@ inline TrackDetails readTrackDetails(Input &in, const std::string &path) {
             }
             p += head + len;
         }
+        }
     } else if (!std::memcmp(h, "fLaC", 4)) {
         in.seek(4, SEEK_SET);
         size_t scanned = 4;
@@ -322,10 +329,11 @@ inline TrackDetails readTrackDetails(Input &in, const std::string &path) {
                     m.sampleRate = (uint32_t(b[10]) << 12) | (uint32_t(b[11]) << 4) | (b[12] >> 4);
                     m.channels = ((b[12] >> 1) & 7) + 1;
                     m.bitDepth = (((b[12] & 1) << 4) | (b[13] >> 4)) + 1;
+                    if(m.sampleRate)m.duration=(uint64_t(b[13]&15)<<32|artBE(b.data()+14,4))/double(m.sampleRate);
                 }
             } else if (!in.seek(n, SEEK_CUR))
                 break;
-            if (last)
+            if (last||(fast&&type==0))
                 break;
         }
     } else if (!std::memcmp(h, "RIFF", 4) && !std::memcmp(h + 8, "WAVE", 4)) {

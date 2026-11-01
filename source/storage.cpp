@@ -1,5 +1,7 @@
 #include "playback_diagnostics.hpp"
 #include "storage.hpp"
+#include "extended_audio.hpp"
+#include "collection.hpp"
 #include "disc.hpp"
 #include "cover_image.hpp"
 #include "smb_lifecycle.hpp"
@@ -7,6 +9,7 @@
 #include <SDL_image.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <fstream>
 #include <smb2/smb2.h>
 #include <smb2/libsmb2.h>
 #include <sys/stat.h>
@@ -37,15 +40,26 @@ SmbSession::SmbSession(const Share &s) {
 SmbSession::~SmbSession() {
     if (ctx_) {
         playbackTrace("smb.disconnect.begin");
-        smb2_disconnect_share(ctx_);
+        // Read-only handles are closed by their owners. Tear down the TCP context
+        // locally instead of waiting for a separate logoff round trip.
         destroySmbContext(ctx_);
         playbackTrace("smb.disconnect.end");
     }
 }
 bool SmbSession::valid() const { return ctx_ != nullptr; }
 std::string SmbSession::error() const { return failure; }
+namespace {
+struct IdleSMB{std::string key;Uint64 at;std::unique_ptr<SmbSession> session;};
+struct SMBPool{std::mutex mutex;std::vector<IdleSMB> idle;};
+SMBPool &smbPool(){static SMBPool pool;return pool;}
+std::string smbKey(const Share &s){return nlohmann::json::array({s.server,s.share,s.user,s.password,s.domain,s.guest}).dump();}
+std::unique_ptr<SmbSession> borrowSMB(const Share &share){auto &pool=smbPool();std::vector<IdleSMB> expired;std::unique_ptr<SmbSession> found;{std::lock_guard<std::mutex> lock(pool.mutex);auto key=smbKey(share);for(auto it=pool.idle.begin();it!=pool.idle.end();){if(SDL_GetTicks64()-it->at>30000){expired.push_back(std::move(*it));it=pool.idle.erase(it);}else if(!found&&it->key==key){found=std::move(it->session);it=pool.idle.erase(it);}else ++it;}}return found?std::move(found):std::make_unique<SmbSession>(share);}
+void returnSMB(const Share &share,std::unique_ptr<SmbSession> session){if(!session||!session->valid())return;auto &pool=smbPool();std::unique_ptr<SmbSession> retired;{std::lock_guard<std::mutex> lock(pool.mutex);if(pool.idle.size()>=6){retired=std::move(pool.idle.front().session);pool.idle.erase(pool.idle.begin());}pool.idle.push_back({smbKey(share),SDL_GetTicks64(),std::move(session)});}}
+}
+void shutdownSMB(){std::vector<IdleSMB> retired;auto &pool=smbPool();{std::lock_guard<std::mutex> lock(pool.mutex);retired.swap(pool.idle);}}
 class SmbInput final : public Input {
     std::unique_ptr<SmbSession> session_;
+    Share credentials_;
     smb2fh *file_ = nullptr;
     uint64_t size_ = 0, pos_ = 0;
     const std::atomic<uint64_t> *generation_;
@@ -56,13 +70,14 @@ class SmbInput final : public Input {
   public:
     SmbInput(const Source &s, const std::string &p, std::string &error,
              const std::atomic<uint64_t> *g, uint64_t e)
-        : session_(new SmbSession(s.share)), generation_(g), expected_(e) {
+        : session_(borrowSMB(s.share)), credentials_(s.share),generation_(g), expected_(e) {
         if (!session_->valid()) {
             error = session_->error();
             return;
         }
         playbackTrace("smb.file.open.begin");
         file_ = smb2_open(session_->get(), join(s.root, p).c_str(), O_RDONLY);
+        if(!file_){session_=std::make_unique<SmbSession>(s.share);if(session_->valid())file_=smb2_open(session_->get(),join(s.root,p).c_str(),O_RDONLY);}
         playbackTrace("smb.file.open.end", bool(file_));
         if (!file_) {
             error = "Cannot open SMB file.";
@@ -78,10 +93,10 @@ class SmbInput final : public Input {
         size_ = stat.smb2_size;
     }
     ~SmbInput() {
-        if (file_)
-            smb2_close(session_->get(), file_);
+        if(file_&&smb2_close(session_->get(),file_)>=0&&failure_.empty())returnSMB(credentials_,std::move(session_));
     }
     bool valid() const { return file_ != nullptr; }
+    void resumeGeneration(const std::atomic<uint64_t> *g,uint64_t e)override{generation_=g;expected_=e;}
     size_t read(void *d, size_t n) override {
         if (!file_ || (generation_ && generation_->load() != expected_))
             return 0;
@@ -115,6 +130,7 @@ class SmbInput final : public Input {
 };
 std::unique_ptr<Input> openInput(const Source &s, const std::string &p, std::string &error,
                                  const std::atomic<uint64_t> *g, uint64_t e) {
+    if(s.root==RadioRoot)return openRadio(p,error,g,e);
     if (!safeRelative(p)) {
         error = "Invalid relative path.";
         return {};
@@ -237,8 +253,13 @@ static std::vector<unsigned char> folderCover(const Source &s, const std::string
     return {};
 }
 std::vector<unsigned char> loadCover(const Source &s, const std::string &track, bool preferFolder) {
+    if(s.root==RadioRoot){std::vector<unsigned char> bytes;if(!s.share.domain.empty()){std::ifstream cached(s.share.domain,std::ios::binary);bytes.assign(std::istreambuf_iterator<char>(cached),{});if(validArt(bytes))return bytes;bytes.clear();}if(collectionHTTP(s.share.folder,bytes,8*1024*1024)==200&&validArt(bytes))return bytes;return {};}
     if (s.root == DiscRoot)
         return discCover(track);
+    if(lower(track).size()>=4&&lower(track).substr(track.size()-4)==".m4a"){
+        auto folder=folderCover(s,track);if(preferFolder&&!folder.empty())return folder;
+        std::string error;auto input=openInput(s,track,error);if(input){ExtendedAudio extra;TrackDetails m;if(extra.open(*input,false,m,error)){auto bytes=extra.artwork();if(validArt(bytes))return bytes;}}return folder;
+    }
     if (preferFolder) {
         auto bytes = folderCover(s, track);
         if (!bytes.empty())

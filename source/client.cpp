@@ -45,7 +45,8 @@ std::string urlEncode(const std::string &s) {
 ClientSession::ClientSession(RemoteClientConfig c, bool screen)
     : config(std::move(c)), screen_(screen) {
     events_ = std::thread(&ClientSession::eventLoop, this);
-    commands_ = std::thread(&ClientSession::commandLoop, this);
+    try{commands_ = std::thread(&ClientSession::commandLoop, this);}
+    catch(...){stop();if(events_.joinable())events_.join();throw;}
 }
 void ClientSession::stop() {
     quit_ = true;
@@ -219,7 +220,7 @@ ClientSession::Result ClientSession::http(const Job &job) {
     result.bytes = std::move(bytes);
     result.data = Json::parse(result.bytes, nullptr, false);
     result.ok = response.compare(9, 3, "200") == 0;
-    if (result.ok && result.data.is_discarded() && job.path.rfind("/api/art", 0) != 0 &&
+    if (result.ok && result.data.is_discarded() && job.path.rfind("/api/art", 0) != 0 && job.path.rfind("/api/album-art/",0)!=0 &&
         job.path.rfind("/api/screen/art", 0) != 0) {
         result.ok = false;
         result.error = "Incomplete or invalid client response.";
@@ -271,7 +272,7 @@ void ClientSession::eventLoop() {
                 while (header.size() < 16384 && header.find("\r\n\r\n") == std::string::npos &&
                        recv(fd, &c, 1, 0) == 1)
                     header += c;
-                open = header.compare(9, 3, "101") == 0 &&
+                open = header.size() >= 12 && header.compare(9, 3, "101") == 0 &&
                        header.find(websocketAccept(key)) != std::string::npos;
             }
             if (open) {

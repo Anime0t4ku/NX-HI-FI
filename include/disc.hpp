@@ -29,6 +29,9 @@ DiscMetadata parseDiscMetadata(const nlohmann::json &, const std::string &, int6
 using DiscArtCheck = std::function<bool(const std::vector<unsigned char> &)>;
 DiscMetadata lookupDiscMetadata(const std::string &, const std::string &, const DiscHTTP &,
                                 const DiscArtCheck & = {});
+bool usbOpticalDriveDetected();
+std::string currentDiscID();
+bool ejectDisc(std::string &);
 bool listDisc(std::vector<Entry> &, std::string &);
 std::unique_ptr<Input> openDisc(const std::string &, std::string &,
                               const std::atomic<uint64_t> * = nullptr, uint64_t = 0);

@@ -49,9 +49,9 @@ std::string timeText(double t) {
 } // namespace
 RemoteView::RemoteView(UI &ui, SDL_Renderer *r, RemoteClientConfig config, Keyboard keyboard,
                        std::vector<RemoteClientConfig> clients, bool screen,Settings localSettings)
-    : ui_(ui), renderer_(r), client_(std::make_unique<ClientSession>(config, screen)),
+    : ui_(ui), renderer_(r), client_(std::make_unique<ClientSession>(config, false)),
       keyboard_(std::move(keyboard)), clients_(std::move(clients)),
-      screenMode_(screen && config.type != "mister"), mister_(config.type == "mister") {
+      screenMode_(false), mister_(config.type == "mister") {
     localSettings_=std::move(localSettings);hostType_=config.type;
     status_ = "Connecting to " + config.name + "...";
     if (mister_) {
@@ -1046,7 +1046,7 @@ void RemoteView::drawPlayer(){
         for(const auto &v:p.value("badges",Json::array())){auto label=display(v);int w=ui_.textWidth(label,size)+20;if(bx!=x&&bx+w>x+width){bx=x;by+=size+16;}ui_.badge(bx,by,w,size+14,label,size);bx+=w+8;}
     }
     if(settings_.value("visualizer",false)){
-        auto a=playerVisualizerRect(fullscreen_,extra,x,width);UI::Clip clip(ui_,a.x,a.y,a.w,a.h);auto bars=p.value("spectrum",Json::array());
+        auto a=PlayerRect{x,fullscreen_?375+extra:392+extra,width,fullscreen_?34:22};UI::Clip clip(ui_,a.x,a.y,a.w,a.h);auto bars=p.value("spectrum",Json::array());
         for(int i=0;i<std::min(32,int(bars.size()));i++){int h=std::max(2,int(std::clamp(bars[i].get<double>(),0.,1.)*a.h));ui_.rect(a.x+i*a.w/32,a.y+a.h-h,std::max(3,a.w/32-(fullscreen_?7:4)),h,ACCENT);}
     }
     if(fullscreen_&&p.value("count",0)>0)ui_.text(64,artworkVisible()?layout().bottom(490):100,std::to_string(p.value("index",0)+1)+" / "+std::to_string(p.value("count",0)),16,MUTED);

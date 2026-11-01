@@ -1,11 +1,14 @@
 #pragma once
 #include "storage.hpp"
 #include "metadata.hpp"
+#include "audio_analysis.hpp"
+#include <deque>
 #include <SDL.h>
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
+#include <future>
 namespace nxh {
 struct Playback {
     Track track;
@@ -14,8 +17,12 @@ struct Playback {
     double position = 0, duration = 0;
     bool busy = false, playing = false, paused = false, ended = false;
     std::string error;
+    uint64_t analysisFrame=0,analysisEpoch=0;
     std::array<float, 32> spectrum{};
+    // Local visualizers only: real post-EQ stereo PCM, never sent to remote clients.
+    std::array<float,256> waveLeft{}, waveRight{};
 };
+struct PreparedAudio;
 class Player {
     SDL_AudioDeviceID device_ = 0;
     std::thread worker_;
@@ -29,7 +36,21 @@ class Player {
     int index_ = 0;
     Settings settings_;
     Playback state_;
-    std::vector<std::array<float, 256>> cosines_, sines_;
+    struct QueuedTrack{Playback playback;uint64_t start,end;};
+    std::deque<QueuedTrack> audibleTracks_;uint64_t submittedTotal_=0,trackStart_=0;
+    AudioVisualQueue visualQueue_;
+    uint64_t visualEpoch_=0;
+    void resetVisualsLocked(uint64_t origin=0){
+        visualQueue_.reset(origin);
+        state_.analysisEpoch=++visualEpoch_;state_.analysisFrame=origin;
+        state_.spectrum={};state_.waveLeft={};state_.waveRight={};
+    }
+    void publishVisualsLocked(std::vector<AudioVisualFrame> frames,uint64_t submitted){
+        visualQueue_.publish(std::move(frames),submitted);
+    }
+    std::future<std::shared_ptr<PreparedAudio>> prepared_;
+    Track preparedTrack_;uint64_t preparedGeneration_=0;bool handoff_=false;
+    int audibleIndexLocked();
     void work();
     void decode(Track, uint64_t);
     void decodeDisc(Track, uint64_t);
@@ -40,6 +61,7 @@ class Player {
     ~Player();
     bool valid() const { return device_ != 0; }
     void settings(const Settings &);
+    void metadata(const TrackDetails &,const Source &,const std::string &);
     void play(std::vector<Track>, int);
     void stop();
     void pause();
