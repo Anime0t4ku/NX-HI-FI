@@ -178,7 +178,7 @@ class App {
         for (int i = first; i < std::min(first + layout().optionRows(), int(optionLabels.size()));
              ++i)
             {if(i==optionSeparator)ui.rect(182,168+(i-first)*48,916,1,MUTED);
-            ui.button(170, 170 + (i - first) * 48, 940, 42, optionLabels[i], i == optionIndex);}
+            if(optionValues[i].is_null())ui.text(182,180+(i-first)*48,optionLabels[i],17,MUTED,916);else ui.button(170, 170 + (i - first) * 48, 940, 42, optionLabels[i], i == optionIndex);}
     }
     bool sourceSelected = false, controlsFocused = false;
     SettingsNavigation settingsNavigation;
@@ -332,6 +332,7 @@ class App {
     }
     bool fullscreen = false;
 #include "app_visualizer.inc"
+#include "app_ordering.inc"
 #include "app_collections.inc"
 #include "app_album_pages.inc"
 #include "app_playlists.inc"
@@ -342,7 +343,7 @@ class App {
         listening=enabled;scrubbing=mouseScrub=false;wake();
         verticalRepeat={};horizontalRepeat={};
     }
-    void toggleFullscreen() {
+    void toggleFullscreen() {if(movingItems)return;
         if(colourPicking)return;
         visualizerFullscreen=false;playerSettingsOpen=false;
         fullscreen=!fullscreen;listening=false;scrubbing=mouseScrub=false;
@@ -884,7 +885,7 @@ class App {
     int sourceTabPage=0;
     std::map<int,std::pair<int,int>> tabPositions;
     int mainTab()const{return page==5||page==7?5:page==3?3:page==4?4:page==6?6:page==8?8:page==9||page==10?9:0;}
-    void selectTab(int tab){
+    void selectTab(int tab){if(movingItems)return;
         if(tab==mainTab())return;
         tabPositions[page]={selected,scroll};
         if(mainTab()==0)sourceTabPage=page;
@@ -1055,8 +1056,10 @@ class App {
         return int(settingFields().size()) - 1;
     }
     void move(int delta) {
+        if(movingItems){moveLibraryItem(delta*(page==5&&collectionGrid()?4:1));return;}
         if (optionApply) {
             optionIndex = (optionIndex + delta + int(optionValues.size())) % optionValues.size();
+            for(size_t n=0;optionValues[optionIndex].is_null()&&n<optionValues.size();n++)optionIndex=(optionIndex+(delta<0?-1:1)+int(optionValues.size()))%optionValues.size();
             return;
         }
         if (colourPicking) {
@@ -1128,8 +1131,10 @@ class App {
         }
     }
     void action() {
+        if(movingItems){finishItemMove(true);return;}
         if(independent&&page==4&&!optionApply){independentDisconnect=true;return;}
         if (optionApply) {
+            if(optionValues[optionIndex].is_null())return;
             auto f = std::move(optionApply);
             optionApply = nullptr;
             f(optionValues[optionIndex]);
@@ -1177,6 +1182,7 @@ class App {
     }
 
     void adjust(int dir) {
+        if(movingItems){if(page==5&&collectionGrid())moveLibraryItem(dir);return;}
         if (optionApply) {
             move(dir);
             return;
@@ -1210,6 +1216,7 @@ class App {
     }
 
     void back() {
+        if(movingItems){finishItemMove(false);return;}
         if(visualizerFullscreen){visualizerFullscreen=false;return;}
         if (optionApply) {
             optionApply = nullptr;
@@ -1257,6 +1264,7 @@ class App {
         }
     }
     void click(int x, int y) {
+        if(movingItems)return;
         if(visualizerFullscreen){visualizerFullscreen=false;return;}
         if(listening){setListening(false);return;}
         if (connectionOpen || scanOpen) {
@@ -1268,7 +1276,7 @@ class App {
         ui.scrollIndicator(1117,170,layout().optionRows()*48-6,int(optionLabels.size()),first,layout().optionRows());
             if (inside(x, y, 170, 170, 940, layout().optionRows() * 48)) {
                 int i = first + (y - 170) / 48;
-                if (i < int(optionValues.size())) {
+                if (i < int(optionValues.size())&&!optionValues[i].is_null()) {
                     optionIndex = i;
                     action();
                 }
@@ -1499,7 +1507,7 @@ class App {
     }
     mutable std::string lastStatusNotice,lastPlaybackNotice;mutable Uint64 statusNoticeAt=0,playbackNoticeAt=0;
     std::string visibleNotice(const std::string &message,bool playback=false)const{auto &last=playback?lastPlaybackNotice:lastStatusNotice;auto &at=playback?playbackNoticeAt:statusNoticeAt;if(message!=last){last=message;at=SDL_GetTicks64();}return !message.empty()&&SDL_GetTicks64()-at>=6000?std::string{}:message;}
-    void drawControls(const Playback &p,const std::string &rawMessage){auto message=visibleNotice(rawMessage,!p.error.empty()&&rawMessage==p.error);
+    void drawControls(const Playback &p,const std::string &rawMessage){auto message=visibleNotice(rawMessage,!p.error.empty()&&rawMessage==p.error);if(movingItems)message=movingKind=="playlist"?"Moving track — confirm to save, Back to cancel":"Moving album — confirm to save, Back to cancel";
         if(!colourPicking){drawSeek(p);if(!listening)drawPlayerButtons(p);}
         // Status/errors stay visible outside the compact controls-only footer.
         if(!message.empty())ui.text(fullscreen?30:600,fullscreen?90:64,message,13,ACCENT,fullscreen?1210:620);
@@ -1508,6 +1516,7 @@ class App {
         int y=layout().footerY()+8;std::vector<std::pair<std::string,std::string>> hints;auto flush=[&]{ui.centeredHints(y,hints);};
         auto hint=[&](const char *button,const std::string &action){hints.emplace_back(button,action);};
         if(listening){hint("Plus","Play/Pause");hint("L","");hint("R","Track");hint("ZL","");hint("ZR","Seek 5s");hint("L3","Exit");flush();return;}
+        if(movingItems){hint("Dpad","Move");hint("A","Save order");hint("B","Cancel");flush();return;}
         if(optionApply){hint("Dpad","Navigate");hint("A","Select");hint("B","Back");flush();return;}
         if(playerSettingsOpen&&!colourPicking){hint("L","");hint("R","Tabs");hint("Dpad","Adjust");hint("A","Choose");hint("B","Close");flush();return;}
         if(colourPicking){hint("Dpad","Colour");hint("A","Choose");hint("B","Cancel");flush();return;}
@@ -1731,7 +1740,7 @@ class App {
             nextTrack();
         if(fullscreen&&(down&HidNpadButton_ZL))player.seek(-5);
         if(fullscreen&&(down&HidNpadButton_ZR))player.seek(5);
-        if (!fullscreen && !colourPicking && !optionApply && (down & HidNpadButton_Minus)) {
+        if (!movingItems && !fullscreen && !colourPicking && !optionApply && (down & HidNpadButton_Minus)) {
             controlsFocused=!controlsFocused;syncPlayerFocus();
         }
         if (!colourPicking && (down & HidNpadButton_X)) {
